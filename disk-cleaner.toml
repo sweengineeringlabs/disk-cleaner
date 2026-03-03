@@ -1,0 +1,46 @@
+# disk-cleaner.toml - Multi-language project cleaning configuration
+# Single-line values only (no multi-line arrays or strings)
+
+[settings]
+default_path = ""
+default_profiles = ["rust"]
+
+[profiles.rust]
+name = "Rust (Cargo)"
+marker = "Cargo.lock"
+type = "command"
+command = "cargo clean"
+output_pattern = 'Removed (\d+) files'
+
+[profiles.node]
+name = "Node.js"
+marker = "package-lock.json"
+alt_markers = ["yarn.lock", "pnpm-lock.yaml", "bun.lock"]
+type = "remove"
+targets = ["node_modules"]
+optional_targets = [".next", ".nuxt", "dist"]
+
+[profiles.java-maven]
+name = "Java (Maven)"
+marker = "pom.xml"
+type = "command"
+command = "mvn clean"
+wrapper = "./mvnw"
+wrapper_windows = ".\\mvnw.cmd"
+
+[profiles.java-gradle]
+name = "Java (Gradle)"
+marker = "build.gradle"
+alt_markers = ["build.gradle.kts"]
+type = "command"
+command = "gradle clean"
+wrapper = "./gradlew"
+wrapper_windows = ".\\gradlew.bat"
+
+[profiles.python]
+name = "Python"
+marker = "pyproject.toml"
+alt_markers = ["setup.py", "requirements.txt"]
+type = "remove"
+targets = [".venv", "venv", ".mypy_cache", ".pytest_cache", ".ruff_cache", "dist", "build"]
+recursive_targets = ["__pycache__"]

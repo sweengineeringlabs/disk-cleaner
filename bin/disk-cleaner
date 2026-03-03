@@ -1,0 +1,204 @@
+#!/bin/bash
+
+# disk-cleaner - Multi-language project cleaner
+#
+# Configurable cleaning tool that uses disk-cleaner.toml to define language profiles.
+# Supports Rust, Node.js, Java (Maven/Gradle), Python, and more.
+
+# Resolve project root (parent of bin/)
+PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+# Source libraries
+source "$PROJECT_ROOT/main/src/lib/common.sh"
+source "$PROJECT_ROOT/main/src/lib/toml-parser.sh"
+source "$PROJECT_ROOT/main/src/clean-profile.sh"
+
+# Defaults
+DRY_RUN=false
+PARALLEL=false
+ALL=false
+SEARCH_PATH=""
+LIST_PROFILES=false
+CONFIG_FILE="$PROJECT_ROOT/disk-cleaner.toml"
+declare -a EXCLUDE_PATTERNS=()
+declare -a INCLUDE_PATTERNS=()
+declare -a LANG_PROFILES=()
+
+# Grand totals (modified by clean_profile)
+grand_total_projects=0
+grand_total_cleaned=0
+grand_total_skipped=0
+grand_total_removed_files=0
+grand_total_size_kib=0
+
+# ─── Help ────────────────────────────────────────────────────────────────────────
+
+show_help() {
+    cat << 'EOF'
+disk-cleaner - Multi-language project cleaner
+
+USAGE:
+    disk-cleaner [OPTIONS]
+
+OPTIONS:
+    -l, --lang PROFILE      Language profile to clean (repeatable, or "all")
+    -c, --config FILE       Path to TOML config (default: disk-cleaner.toml in project root)
+    -L, --list-profiles     Show available profiles and exit
+    -e, --exclude PATTERN   Exclude projects matching pattern (can be repeated)
+    -i, --include PATTERN   Only include projects matching pattern (can be repeated)
+    -d, --dry-run           Show what would be cleaned without cleaning
+    -p, --path PATH         Root path to search (defaults to config default or current dir)
+    -P, --parallel          Run clean operations in parallel
+    -a, --all               Clean all projects, ignoring Exclude/Include filters
+    -h, --help              Show this help message
+
+EXAMPLES:
+    disk-cleaner --lang rust                              # Clean Rust projects
+    disk-cleaner --lang rust --lang node -d               # Dry run Rust + Node
+    disk-cleaner --lang all -d -p /path/to/projects       # Dry run all languages
+    disk-cleaner --lang node -e myapp                     # Node except myapp
+    disk-cleaner -L                                       # List profiles
+
+EOF
+    exit 0
+}
+
+# ─── Argument Parsing ────────────────────────────────────────────────────────────
+
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        -l|--lang)
+            LANG_PROFILES+=("$2")
+            shift 2
+            ;;
+        -c|--config)
+            CONFIG_FILE="$2"
+            shift 2
+            ;;
+        -L|--list-profiles)
+            LIST_PROFILES=true
+            shift
+            ;;
+        -e|--exclude)
+            EXCLUDE_PATTERNS+=("$2")
+            shift 2
+            ;;
+        -i|--include)
+            INCLUDE_PATTERNS+=("$2")
+            shift 2
+            ;;
+        -d|--dry-run)
+            DRY_RUN=true
+            shift
+            ;;
+        -p|--path)
+            SEARCH_PATH="$2"
+            shift 2
+            ;;
+        -P|--parallel)
+            PARALLEL=true
+            shift
+            ;;
+        -a|--all)
+            ALL=true
+            shift
+            ;;
+        -h|--help)
+            show_help
+            ;;
+        *)
+            echo -e "${RED}Unknown option: $1${NC}"
+            echo "Use -h or --help for usage information"
+            exit 1
+            ;;
+    esac
+done
+
+# ─── Load Config ─────────────────────────────────────────────────────────────────
+
+parse_toml "$CONFIG_FILE"
+
+# ─── List Profiles ───────────────────────────────────────────────────────────────
+
+if [[ "$LIST_PROFILES" == true ]]; then
+    echo -e "${CYAN}Available profiles (from $CONFIG_FILE):${NC}"
+    echo ""
+    for profile in "${TOML_PROFILES[@]}"; do
+        local_name=$(toml_get "profiles.${profile}.name")
+        local_marker=$(toml_get "profiles.${profile}.marker")
+        local_type=$(toml_get "profiles.${profile}.type")
+        echo -e "  ${WHITE}${profile}${NC} - ${local_name}"
+        echo -e "    ${GRAY}marker: ${local_marker}  |  type: ${local_type}${NC}"
+    done
+    echo ""
+    exit 0
+fi
+
+# ─── Resolve Profiles ───────────────────────────────────────────────────────────
+
+# If no --lang specified, use default_profiles from config
+if [[ ${#LANG_PROFILES[@]} -eq 0 ]]; then
+    toml_get_array "settings.default_profiles" LANG_PROFILES
+fi
+
+# Handle "all" — expand to all defined profiles
+declare -a RESOLVED_PROFILES=()
+for lp in "${LANG_PROFILES[@]}"; do
+    if [[ "$lp" == "all" ]]; then
+        RESOLVED_PROFILES=("${TOML_PROFILES[@]}")
+        break
+    else
+        # Validate profile exists
+        if [[ -z "$(toml_get "profiles.${lp}.name")" ]]; then
+            echo -e "${RED}Unknown profile: $lp${NC}"
+            echo "Use --list-profiles to see available profiles"
+            exit 1
+        fi
+        RESOLVED_PROFILES+=("$lp")
+    fi
+done
+LANG_PROFILES=("${RESOLVED_PROFILES[@]}")
+
+if [[ ${#LANG_PROFILES[@]} -eq 0 ]]; then
+    echo -e "${RED}No profiles selected. Use --lang or set default_profiles in config.${NC}"
+    exit 1
+fi
+
+# ─── Resolve Search Path ────────────────────────────────────────────────────────
+
+if [[ -z "$SEARCH_PATH" ]]; then
+    local_default_path=$(toml_get "settings.default_path")
+    if [[ -n "$local_default_path" ]]; then
+        SEARCH_PATH="$local_default_path"
+    else
+        SEARCH_PATH="$(pwd)"
+    fi
+fi
+
+# ─── Main Execution ─────────────────────────────────────────────────────────────
+
+echo -e "${CYAN}disk-cleaner - Multi-language project cleaner${NC}"
+echo -e "${GRAY}Config: $CONFIG_FILE${NC}"
+echo -e "${GRAY}Profiles: ${LANG_PROFILES[*]}${NC}"
+
+for profile in "${LANG_PROFILES[@]}"; do
+    clean_profile "$profile"
+done
+
+# ─── Grand Summary ───────────────────────────────────────────────────────────────
+
+echo ""
+echo -e "${CYAN}==================================================${NC}"
+echo -e "${GREEN}Cleaning complete!${NC}"
+echo -e "${WHITE}  Profiles run:       ${#LANG_PROFILES[@]} (${LANG_PROFILES[*]})${NC}"
+echo -e "${WHITE}  Projects found:     $grand_total_projects${NC}"
+echo -e "${WHITE}  Projects cleaned:   $grand_total_cleaned${NC}"
+echo -e "${WHITE}  Projects skipped:   $grand_total_skipped${NC}"
+
+if [[ "$grand_total_removed_files" -gt 0 ]]; then
+    echo -e "${WHITE}  Total files removed: $grand_total_removed_files${NC}"
+fi
+
+if [[ "$grand_total_size_kib" -gt 0 ]]; then
+    echo -e "${WHITE}  Total space freed:  $(format_size $((grand_total_size_kib * 1024)))${NC}"
+fi
