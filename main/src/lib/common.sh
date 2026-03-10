@@ -78,3 +78,63 @@ should_clean() {
 
     return 0
 }
+
+# ─── Spinner ────────────────────────────────────────────────────────────────────
+
+SPINNER_PID=""
+
+spinner_start() {
+    local msg="$1"
+    if [[ "$JSON_OUTPUT" == true ]]; then
+        return
+    fi
+    (
+        local chars='|/-\'
+        local i=0
+        while true; do
+            local c="${chars:$i:1}"
+            printf "\r  ${CYAN}%s${NC} %s" "$c" "$msg" >&2
+            i=$(( (i + 1) % 4 ))
+            sleep 0.15
+        done
+    ) &
+    SPINNER_PID=$!
+    disown "$SPINNER_PID" 2>/dev/null
+}
+
+spinner_stop() {
+    if [[ -n "$SPINNER_PID" ]]; then
+        kill "$SPINNER_PID" 2>/dev/null
+        wait "$SPINNER_PID" 2>/dev/null || true
+        SPINNER_PID=""
+        printf "\r\033[K" >&2
+    fi
+}
+
+# ─── Cancel Support ─────────────────────────────────────────────────────────────
+
+CANCELLED=false
+
+cancel_cleanup() {
+    CANCELLED=true
+    spinner_stop
+    echo "" >&2
+    if [[ "$JSON_OUTPUT" == true ]]; then
+        emit_json_event "{\"event\":\"cancelled\"}"
+    else
+        echo -e "${YELLOW}Cancelled by user.${NC}" >&2
+        if [[ $grand_total_cleaned -gt 0 || $grand_total_size_bytes -gt 0 ]]; then
+            echo -e "${GRAY}  Cleaned so far: $grand_total_cleaned projects, $(format_size "$grand_total_size_bytes") freed${NC}" >&2
+        fi
+    fi
+    exit 130
+}
+
+# Emit a JSON event line (for --json mode)
+emit_json_event() {
+    local json="$1"
+    local ts
+    ts=$(date -u +"%Y-%m-%dT%H:%M:%SZ" 2>/dev/null || date +"%Y-%m-%dT%H:%M:%S")
+    # Insert timestamp into JSON object
+    echo "${json%\}},\"timestamp\":\"$ts\"}"
+}

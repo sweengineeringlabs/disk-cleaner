@@ -4,13 +4,16 @@
 
 clean_profile() {
     local profile="$1"
-    local p_name p_marker p_type p_command p_output_pattern p_wrapper
+    local profile_index="$2"
+    local profile_count="$3"
+    local p_name p_marker p_type p_command p_output_pattern p_wrapper p_clean_dir
     p_name=$(toml_get "profiles.${profile}.name")
     p_marker=$(toml_get "profiles.${profile}.marker")
     p_type=$(toml_get "profiles.${profile}.type")
     p_command=$(toml_get "profiles.${profile}.command")
     p_output_pattern=$(toml_get "profiles.${profile}.output_pattern")
     p_wrapper=$(toml_get "profiles.${profile}.wrapper")
+    p_clean_dir=$(toml_get "profiles.${profile}.clean_dir")
 
     declare -a p_alt_markers=()
     declare -a p_targets=()
@@ -21,17 +24,23 @@ clean_profile() {
     toml_get_array "profiles.${profile}.optional_targets" p_optional_targets
     toml_get_array "profiles.${profile}.recursive_targets" p_recursive_targets
 
-    echo ""
-    echo -e "${CYAN}━━━ ${p_name} ━━━${NC}"
-    echo -e "${CYAN}Scanning for ${p_name} projects in: $SEARCH_PATH${NC}"
+    if [[ "$JSON_OUTPUT" == true ]]; then
+        emit_json_event "{\"event\":\"scan_start\",\"profile\":\"$profile\",\"name\":\"$p_name\",\"path\":\"$SEARCH_PATH\"}"
+    else
+        echo ""
+        echo -e "${CYAN}━━━ ${p_name} [$profile_index/$profile_count] ━━━${NC}"
+        echo -e "${CYAN}Scanning for ${p_name} projects in: $SEARCH_PATH${NC}"
 
-    if [[ "$ALL" == true ]]; then
-        echo -e "${MAGENTA}Mode: ALL (ignoring Exclude/Include filters)${NC}"
+        if [[ "$ALL" == true ]]; then
+            echo -e "${MAGENTA}Mode: ALL (ignoring Exclude/Include filters)${NC}"
+        fi
     fi
 
     # Find projects by marker files
     declare -a all_markers=("$p_marker")
     all_markers+=("${p_alt_markers[@]}")
+
+    spinner_start "Scanning for ${p_name} projects..."
 
     declare -a found_dirs=()
     for marker in "${all_markers[@]}"; do
@@ -52,6 +61,8 @@ clean_profile() {
         done < <(find "$SEARCH_PATH" -name "$marker" -type f 2>/dev/null)
     done
 
+    spinner_stop
+
     # Sort directories
     IFS=$'\n' found_dirs=($(sort <<< "${found_dirs[*]}")); unset IFS
 
@@ -67,17 +78,21 @@ clean_profile() {
         fi
     done
 
-    echo ""
-    echo -e "${CYAN}Found ${#found_dirs[@]} ${p_name} projects${NC}"
-    echo -e "${GREEN}  To clean: ${#to_clean[@]}${NC}"
-    echo -e "${YELLOW}  Skipped:  ${#skipped[@]}${NC}"
+    if [[ "$JSON_OUTPUT" == true ]]; then
+        emit_json_event "{\"event\":\"scan_complete\",\"profile\":\"$profile\",\"found\":${#found_dirs[@]},\"to_clean\":${#to_clean[@]},\"skipped\":${#skipped[@]}}"
+    else
+        echo ""
+        echo -e "${CYAN}Found ${#found_dirs[@]} ${p_name} projects${NC}"
+        echo -e "${GREEN}  To clean: ${#to_clean[@]}${NC}"
+        echo -e "${YELLOW}  Skipped:  ${#skipped[@]}${NC}"
+    fi
 
     grand_total_projects=$((grand_total_projects + ${#found_dirs[@]}))
     grand_total_cleaned=$((grand_total_cleaned + ${#to_clean[@]}))
     grand_total_skipped=$((grand_total_skipped + ${#skipped[@]}))
 
     # Show skipped
-    if [[ ${#skipped[@]} -gt 0 && "$ALL" != true && (${#EXCLUDE_PATTERNS[@]} -gt 0 || ${#INCLUDE_PATTERNS[@]} -gt 0) ]]; then
+    if [[ "$JSON_OUTPUT" != true && ${#skipped[@]} -gt 0 && "$ALL" != true && (${#EXCLUDE_PATTERNS[@]} -gt 0 || ${#INCLUDE_PATTERNS[@]} -gt 0) ]]; then
         echo ""
         echo -e "${YELLOW}Skipped projects:${NC}"
         for s in "${skipped[@]}"; do
@@ -94,51 +109,80 @@ clean_profile() {
 
     # Dry run
     if [[ "$DRY_RUN" == true ]]; then
-        echo ""
-        echo -e "${MAGENTA}[DRY RUN] Would clean:${NC}"
-        for dir in "${to_clean[@]}"; do
-            local rel
-            rel=$(get_relative_path "$dir")
-            echo -e "  ${WHITE}- $rel${NC}"
-            if [[ "$p_type" == "remove" ]]; then
-                for t in "${p_targets[@]}"; do
-                    if [[ -d "$dir/$t" ]]; then
-                        local sz
-                        sz=$(dir_size_bytes "$dir/$t")
-                        echo -e "    ${GRAY}remove: $t ($(format_size "$sz"))${NC}"
+        if [[ "$JSON_OUTPUT" == true ]]; then
+            for dir in "${to_clean[@]}"; do
+                local rel
+                rel=$(get_relative_path "$dir")
+                if [[ "$p_type" == "command" ]]; then
+                    local cmd="$p_command"
+                    if [[ -n "$p_wrapper" && -f "$dir/$p_wrapper" ]]; then
+                        cmd="${p_wrapper} clean"
                     fi
-                done
-                for t in "${p_optional_targets[@]}"; do
-                    if [[ -d "$dir/$t" ]]; then
-                        local sz
-                        sz=$(dir_size_bytes "$dir/$t")
-                        echo -e "    ${GRAY}remove: $t ($(format_size "$sz"))${NC}"
+                    local est_size=0
+                    if [[ -n "$p_clean_dir" && -d "$dir/$p_clean_dir" ]]; then
+                        est_size=$(dir_size_bytes "$dir/$p_clean_dir")
                     fi
-                done
-                for t in "${p_recursive_targets[@]}"; do
-                    local count
-                    count=$(find "$dir" -type d -name "$t" 2>/dev/null | wc -l)
-                    if [[ "$count" -gt 0 ]]; then
-                        echo -e "    ${GRAY}remove recursive: $t ($count found)${NC}"
-                    fi
-                done
-            elif [[ "$p_type" == "command" ]]; then
-                local cmd="$p_command"
-                if [[ -n "$p_wrapper" && -f "$dir/$p_wrapper" ]]; then
-                    cmd="${p_wrapper} clean"
+                    emit_json_event "{\"event\":\"dry_run\",\"profile\":\"$profile\",\"project\":\"$rel\",\"command\":\"$cmd\",\"estimated_size_bytes\":$est_size}"
+                else
+                    emit_json_event "{\"event\":\"dry_run\",\"profile\":\"$profile\",\"project\":\"$rel\"}"
                 fi
-                echo -e "    ${GRAY}would run: $cmd${NC}"
-            fi
-        done
+            done
+        else
+            echo ""
+            echo -e "${MAGENTA}[DRY RUN] Would clean:${NC}"
+            for dir in "${to_clean[@]}"; do
+                local rel
+                rel=$(get_relative_path "$dir")
+                echo -e "  ${WHITE}- $rel${NC}"
+                if [[ "$p_type" == "remove" ]]; then
+                    for t in "${p_targets[@]}"; do
+                        if [[ -d "$dir/$t" ]]; then
+                            local sz
+                            sz=$(dir_size_bytes "$dir/$t")
+                            echo -e "    ${GRAY}remove: $t ($(format_size "$sz"))${NC}"
+                        fi
+                    done
+                    for t in "${p_optional_targets[@]}"; do
+                        if [[ -d "$dir/$t" ]]; then
+                            local sz
+                            sz=$(dir_size_bytes "$dir/$t")
+                            echo -e "    ${GRAY}remove: $t ($(format_size "$sz"))${NC}"
+                        fi
+                    done
+                    for t in "${p_recursive_targets[@]}"; do
+                        local count
+                        count=$(find "$dir" -type d -name "$t" 2>/dev/null | wc -l)
+                        if [[ "$count" -gt 0 ]]; then
+                            echo -e "    ${GRAY}remove recursive: $t ($count found)${NC}"
+                        fi
+                    done
+                elif [[ "$p_type" == "command" ]]; then
+                    local cmd="$p_command"
+                    if [[ -n "$p_wrapper" && -f "$dir/$p_wrapper" ]]; then
+                        cmd="${p_wrapper} clean"
+                    fi
+                    echo -e "    ${GRAY}would run: $cmd${NC}"
+                    if [[ -n "$p_clean_dir" && -d "$dir/$p_clean_dir" ]]; then
+                        local sz
+                        sz=$(dir_size_bytes "$dir/$p_clean_dir")
+                        echo -e "    ${GRAY}$p_clean_dir/ size: $(format_size "$sz")${NC}"
+                    fi
+                fi
+            done
+        fi
         return
     fi
 
-    echo ""
-    echo -e "${CYAN}Cleaning ${p_name} projects...${NC}"
-    echo ""
+    if [[ "$JSON_OUTPUT" != true ]]; then
+        echo ""
+        echo -e "${CYAN}Cleaning ${p_name} projects...${NC}"
+        echo ""
+    fi
 
-    local profile_removed=0
-    local profile_size_mib=0
+    local profile_size_bytes=0
+    local project_index=0
+
+    [[ "$CANCELLED" == true ]] && return
 
     if [[ "$PARALLEL" == true && ${#to_clean[@]} -gt 1 && "$p_type" == "command" ]]; then
         # Parallel mode for command-type profiles
@@ -146,6 +190,11 @@ clean_profile() {
         for dir in "${to_clean[@]}"; do
             (
                 rel=$(get_relative_path "$dir")
+                # Measure build dir before cleaning
+                local size_freed=0
+                if [[ -n "$p_clean_dir" && -d "$dir/$p_clean_dir" ]]; then
+                    size_freed=$(dir_size_bytes "$dir/$p_clean_dir")
+                fi
                 pushd "$dir" > /dev/null || exit 1
                 local cmd="$p_command"
                 if [[ -n "$p_wrapper" && -f "$p_wrapper" ]]; then
@@ -153,10 +202,7 @@ clean_profile() {
                 fi
                 result=$(eval "$cmd" 2>&1) || true
                 popd > /dev/null || exit 1
-                echo "Cleaned: $rel"
-                if [[ -n "$result" ]]; then
-                    echo "  $result"
-                fi
+                echo "RESULT:$rel:$size_freed"
             ) &
             PIDS+=($!)
         done
@@ -167,11 +213,23 @@ clean_profile() {
         echo -e "${GREEN}Parallel cleaning complete${NC}"
     else
         for dir in "${to_clean[@]}"; do
+            [[ "$CANCELLED" == true ]] && break
+
             local rel
             rel=$(get_relative_path "$dir")
+            project_index=$((project_index + 1))
 
             if [[ "$p_type" == "command" ]]; then
-                echo -ne "${WHITE}Cleaning: $rel${NC}"
+                # Measure build dir size before cleaning
+                local size_freed=0
+                if [[ -n "$p_clean_dir" && -d "$dir/$p_clean_dir" ]]; then
+                    size_freed=$(dir_size_bytes "$dir/$p_clean_dir")
+                fi
+
+                if [[ "$JSON_OUTPUT" != true ]]; then
+                    echo -ne "${GRAY}[$project_index/${#to_clean[@]}] ${NC}"
+                    echo -ne "${WHITE}Cleaning: $rel${NC}"
+                fi
 
                 pushd "$dir" > /dev/null || continue
                 local cmd="$p_command"
@@ -182,53 +240,40 @@ clean_profile() {
                 result=$(eval "$cmd" 2>&1) || true
                 popd > /dev/null || true
 
-                # Parse output for file count (Rust-specific pattern)
-                if [[ -n "$p_output_pattern" ]]; then
-                    # Convert TOML regex to bash-compatible
-                    local bash_pattern="${p_output_pattern//\\d/[0-9]}"
-                    bash_pattern="${bash_pattern//+/\+}"
-                    if [[ "$result" =~ Removed\ ([0-9]+)\ files ]]; then
-                        local files="${BASH_REMATCH[1]}"
-                        profile_removed=$((profile_removed + files))
-                        grand_total_removed_files=$((grand_total_removed_files + files))
+                profile_size_bytes=$((profile_size_bytes + size_freed))
+                grand_total_size_bytes=$((grand_total_size_bytes + size_freed))
 
-                        if [[ "$result" =~ ([0-9]+)\.?([0-9]*)\ *(GiB|MiB|KiB) ]]; then
-                            local whole="${BASH_REMATCH[1]}"
-                            local frac="${BASH_REMATCH[2]:-0}"
-                            local unit="${BASH_REMATCH[3]}"
-                            # Normalize frac to 2 digits
-                            frac="${frac}00"; frac="${frac:0:2}"
-                            local val_x100=$(( whole * 100 + 10#$frac ))
-                            case "$unit" in
-                                GiB) grand_total_size_kib=$(( grand_total_size_kib + val_x100 * 1048576 / 100 )) ;;
-                                MiB) grand_total_size_kib=$(( grand_total_size_kib + val_x100 * 1024 / 100 )) ;;
-                                KiB) grand_total_size_kib=$(( grand_total_size_kib + val_x100 / 100 )) ;;
-                            esac
-                        fi
-                        echo -e " ${GRAY}- $(echo "$result" | tr -d '\n')${NC}"
-                    elif [[ "$result" =~ error: ]]; then
+                if [[ "$JSON_OUTPUT" == true ]]; then
+                    emit_json_event "{\"event\":\"clean_complete\",\"profile\":\"$profile\",\"project\":\"$rel\",\"size_bytes\":$size_freed,\"cumulative_bytes\":$profile_size_bytes}"
+                else
+                    local sz_fmt cum_fmt
+                    sz_fmt=$(format_size "$size_freed")
+                    cum_fmt=$(format_size "$profile_size_bytes")
+                    if [[ "$result" =~ error:|Error ]]; then
                         echo -e " ${RED}- Error${NC}"
                         echo -e "  ${RED}$result${NC}"
                     else
-                        echo -e " ${GRAY}- Done${NC}"
+                        echo -e " ${GRAY}| freed: $sz_fmt | total: $cum_fmt${NC}"
                     fi
-                elif [[ "$result" =~ error:|Error ]]; then
-                    echo -e " ${RED}- Error${NC}"
-                    echo -e "  ${RED}$result${NC}"
-                else
-                    echo -e " ${GRAY}- Done${NC}"
                 fi
 
             elif [[ "$p_type" == "remove" ]]; then
-                echo -e "${WHITE}Cleaning: $rel${NC}"
+                if [[ "$JSON_OUTPUT" != true ]]; then
+                    echo -e "${GRAY}[$project_index/${#to_clean[@]}] ${NC}${WHITE}Cleaning: $rel${NC}"
+                fi
+
+                local project_size_bytes=0
 
                 # Remove target directories
                 for t in "${p_targets[@]}"; do
                     if [[ -d "$dir/$t" ]]; then
                         local sz
                         sz=$(dir_size_bytes "$dir/$t")
+                        project_size_bytes=$((project_size_bytes + sz))
                         rm -rf "$dir/$t"
-                        echo -e "  ${GRAY}removed: $t ($(format_size "$sz"))${NC}"
+                        if [[ "$JSON_OUTPUT" != true ]]; then
+                            echo -e "  ${GRAY}removed: $t ($(format_size "$sz"))${NC}"
+                        fi
                     fi
                 done
 
@@ -237,8 +282,11 @@ clean_profile() {
                     if [[ -d "$dir/$t" ]]; then
                         local sz
                         sz=$(dir_size_bytes "$dir/$t")
+                        project_size_bytes=$((project_size_bytes + sz))
                         rm -rf "$dir/$t"
-                        echo -e "  ${GRAY}removed: $t ($(format_size "$sz"))${NC}"
+                        if [[ "$JSON_OUTPUT" != true ]]; then
+                            echo -e "  ${GRAY}removed: $t ($(format_size "$sz"))${NC}"
+                        fi
                     fi
                 done
 
@@ -246,14 +294,36 @@ clean_profile() {
                 for t in "${p_recursive_targets[@]}"; do
                     local count=0
                     while IFS= read -r rdir; do
+                        local sz
+                        sz=$(dir_size_bytes "$rdir")
+                        project_size_bytes=$((project_size_bytes + sz))
                         rm -rf "$rdir"
                         count=$((count + 1))
                     done < <(find "$dir" -type d -name "$t" 2>/dev/null)
-                    if [[ "$count" -gt 0 ]]; then
+                    if [[ "$count" -gt 0 && "$JSON_OUTPUT" != true ]]; then
                         echo -e "  ${GRAY}removed recursive: $t ($count directories)${NC}"
                     fi
                 done
+
+                profile_size_bytes=$((profile_size_bytes + project_size_bytes))
+                grand_total_size_bytes=$((grand_total_size_bytes + project_size_bytes))
+
+                if [[ "$JSON_OUTPUT" == true ]]; then
+                    emit_json_event "{\"event\":\"clean_complete\",\"profile\":\"$profile\",\"project\":\"$rel\",\"size_bytes\":$project_size_bytes,\"cumulative_bytes\":$profile_size_bytes}"
+                else
+                    local pf_fmt cum_fmt
+                    pf_fmt=$(format_size "$project_size_bytes")
+                    cum_fmt=$(format_size "$profile_size_bytes")
+                    echo -e "  ${CYAN}project freed: $pf_fmt | profile total: $cum_fmt${NC}"
+                fi
             fi
         done
+    fi
+
+    if [[ "$JSON_OUTPUT" == true ]]; then
+        emit_json_event "{\"event\":\"profile_complete\",\"profile\":\"$profile\",\"name\":\"$p_name\",\"cleaned\":${#to_clean[@]},\"freed_bytes\":$profile_size_bytes,\"cumulative_total_bytes\":$grand_total_size_bytes}"
+    else
+        echo ""
+        echo -e "${GREEN}${p_name} complete: $(format_size "$profile_size_bytes") freed${NC}"
     fi
 }

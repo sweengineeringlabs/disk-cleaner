@@ -17,6 +17,7 @@ source "$PROJECT_ROOT/main/src/clean-profile.sh"
 DRY_RUN=false
 PARALLEL=false
 ALL=false
+JSON_OUTPUT=false
 SEARCH_PATH=""
 LIST_PROFILES=false
 CONFIG_FILE="$PROJECT_ROOT/disk-cleaner.toml"
@@ -28,8 +29,7 @@ declare -a LANG_PROFILES=()
 grand_total_projects=0
 grand_total_cleaned=0
 grand_total_skipped=0
-grand_total_removed_files=0
-grand_total_size_kib=0
+grand_total_size_bytes=0
 
 # ─── Help ────────────────────────────────────────────────────────────────────────
 
@@ -50,13 +50,17 @@ OPTIONS:
     -p, --path PATH         Root path to search (defaults to config default or current dir)
     -P, --parallel          Run clean operations in parallel
     -a, --all               Clean all projects, ignoring Exclude/Include filters
+    -j, --json              Emit structured JSON lines instead of colored text
     -h, --help              Show this help message
+
+Press Ctrl+C at any time to cancel. A partial summary is printed on exit.
 
 EXAMPLES:
     disk-cleaner --lang rust                              # Clean Rust projects
     disk-cleaner --lang rust --lang node -d               # Dry run Rust + Node
     disk-cleaner --lang all -d -p /path/to/projects       # Dry run all languages
     disk-cleaner --lang node -e myapp                     # Node except myapp
+    disk-cleaner --lang all --json                        # JSON event stream
     disk-cleaner -L                                       # List profiles
 
 EOF
@@ -101,6 +105,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         -a|--all)
             ALL=true
+            shift
+            ;;
+        -j|--json)
+            JSON_OUTPUT=true
             shift
             ;;
         -h|--help)
@@ -175,30 +183,40 @@ if [[ -z "$SEARCH_PATH" ]]; then
     fi
 fi
 
+# ─── Cancel Trap ────────────────────────────────────────────────────────────────
+
+trap cancel_cleanup SIGINT
+
 # ─── Main Execution ─────────────────────────────────────────────────────────────
 
-echo -e "${CYAN}disk-cleaner - Multi-language project cleaner${NC}"
-echo -e "${GRAY}Config: $CONFIG_FILE${NC}"
-echo -e "${GRAY}Profiles: ${LANG_PROFILES[*]}${NC}"
+if [[ "$JSON_OUTPUT" == true ]]; then
+    emit_json_event "{\"event\":\"start\",\"config\":\"$CONFIG_FILE\",\"profiles\":[$(printf '\"%s\",' "${LANG_PROFILES[@]}" | sed 's/,$//')],\"path\":\"$SEARCH_PATH\",\"dry_run\":$DRY_RUN,\"parallel\":$PARALLEL}"
+else
+    echo -e "${CYAN}disk-cleaner - Multi-language project cleaner${NC}"
+    echo -e "${GRAY}Config: $CONFIG_FILE${NC}"
+    echo -e "${GRAY}Profiles: ${LANG_PROFILES[*]}${NC}"
+fi
 
+profile_idx=0
+profile_count=${#LANG_PROFILES[@]}
 for profile in "${LANG_PROFILES[@]}"; do
-    clean_profile "$profile"
+    [[ "$CANCELLED" == true ]] && break
+    profile_idx=$((profile_idx + 1))
+    clean_profile "$profile" "$profile_idx" "$profile_count"
 done
 
 # ─── Grand Summary ───────────────────────────────────────────────────────────────
 
-echo ""
-echo -e "${CYAN}==================================================${NC}"
-echo -e "${GREEN}Cleaning complete!${NC}"
-echo -e "${WHITE}  Profiles run:       ${#LANG_PROFILES[@]} (${LANG_PROFILES[*]})${NC}"
-echo -e "${WHITE}  Projects found:     $grand_total_projects${NC}"
-echo -e "${WHITE}  Projects cleaned:   $grand_total_cleaned${NC}"
-echo -e "${WHITE}  Projects skipped:   $grand_total_skipped${NC}"
-
-if [[ "$grand_total_removed_files" -gt 0 ]]; then
-    echo -e "${WHITE}  Total files removed: $grand_total_removed_files${NC}"
-fi
-
-if [[ "$grand_total_size_kib" -gt 0 ]]; then
-    echo -e "${WHITE}  Total space freed:  $(format_size $((grand_total_size_kib * 1024)))${NC}"
+if [[ "$JSON_OUTPUT" == true ]]; then
+    local_freed_fmt=$(format_size "$grand_total_size_bytes")
+    emit_json_event "{\"event\":\"summary\",\"profiles_run\":${#LANG_PROFILES[@]},\"projects_found\":$grand_total_projects,\"projects_cleaned\":$grand_total_cleaned,\"projects_skipped\":$grand_total_skipped,\"total_freed_bytes\":$grand_total_size_bytes,\"total_freed_formatted\":\"$local_freed_fmt\"}"
+else
+    echo ""
+    echo -e "${CYAN}==================================================${NC}"
+    echo -e "${GREEN}Cleaning complete!${NC}"
+    echo -e "${WHITE}  Profiles run:       ${#LANG_PROFILES[@]} (${LANG_PROFILES[*]})${NC}"
+    echo -e "${WHITE}  Projects found:     $grand_total_projects${NC}"
+    echo -e "${WHITE}  Projects cleaned:   $grand_total_cleaned${NC}"
+    echo -e "${WHITE}  Projects skipped:   $grand_total_skipped${NC}"
+    echo -e "${GREEN}  Total space freed:  $(format_size "$grand_total_size_bytes")${NC}"
 fi

@@ -1,5 +1,23 @@
 # disk-cleaner.toml - Multi-language project cleaning configuration
 # Single-line values only (no multi-line arrays or strings)
+#
+# Profile fields:
+#   name              Display name for the profile
+#   marker            Primary file used to detect projects (e.g. Cargo.lock, pom.xml)
+#   alt_markers       Additional marker files to detect projects
+#   type              "command" (run a shell command) or "remove" (delete directories)
+#
+# Command-type profiles:
+#   command           Shell command to run (e.g. "cargo clean", "mvn clean")
+#   wrapper           Wrapper script to prefer over command (e.g. ./mvnw)
+#   wrapper_windows   Windows-specific wrapper (e.g. .\mvnw.cmd)
+#   clean_dir         Build output directory to measure before cleaning (for size tracking)
+#   output_pattern    Regex to parse command output for file count
+#
+# Remove-type profiles:
+#   targets           Directories to delete (e.g. node_modules, .venv)
+#   optional_targets  Directories to delete only if they exist (e.g. .next, dist)
+#   recursive_targets Directories to find and delete recursively (e.g. __pycache__)
 
 [settings]
 default_path = ""
@@ -10,6 +28,7 @@ name = "Rust (Cargo)"
 marker = "Cargo.lock"
 type = "command"
 command = "cargo clean"
+clean_dir = "target"
 output_pattern = 'Removed (\d+) files'
 
 [profiles.node]
@@ -27,6 +46,7 @@ type = "command"
 command = "mvn clean"
 wrapper = "./mvnw"
 wrapper_windows = ".\\mvnw.cmd"
+clean_dir = "target"
 
 [profiles.java-gradle]
 name = "Java (Gradle)"
@@ -36,6 +56,7 @@ type = "command"
 command = "gradle clean"
 wrapper = "./gradlew"
 wrapper_windows = ".\\gradlew.bat"
+clean_dir = "build"
 
 [profiles.python]
 name = "Python"

@@ -6,6 +6,7 @@
     Configurable cleaning tool that uses disk-cleaner.toml to define language profiles.
     Supports Rust, Node.js, Java (Maven/Gradle), Python, and more.
     Extensible without script changes — just add profiles to the TOML config.
+    Shows a progress indicator while scanning. Press Ctrl+C to cancel gracefully.
 
 .PARAMETER Lang
     Language profile(s) to clean. Repeatable. Use "all" for everything.
@@ -34,6 +35,9 @@
 .PARAMETER All
     Clean all projects, ignoring Exclude/Include filters.
 
+.PARAMETER JsonOutput
+    Emit structured JSON lines (one per event) instead of colored text.
+
 .PARAMETER Help
     Show usage information and exit.
 
@@ -52,6 +56,10 @@
 .EXAMPLE
     .\disk-cleaner.ps1 -ListProfiles
     Show available profiles.
+
+.EXAMPLE
+    .\disk-cleaner.ps1 -Lang all -JsonOutput -Path C:\projects
+    Clean all languages and emit JSON events.
 #>
 
 param(
@@ -81,6 +89,9 @@ param(
 
     [Parameter()]
     [switch]$All,
+
+    [Parameter()]
+    [switch]$JsonOutput,
 
     [Parameter()]
     [Alias("h")]
@@ -194,13 +205,17 @@ OPTIONS:
     -Path <path>          Root path to search (defaults to config default or script dir)
     -Parallel             Run clean operations in parallel
     -All                  Clean all projects, ignoring Exclude/Include filters
+    -JsonOutput           Emit structured JSON lines instead of colored text
     -Help, -h             Show this help message
+
+Press Ctrl+C at any time to cancel. A partial summary is printed on exit.
 
 EXAMPLES:
     .\disk-cleaner.ps1 -Lang rust                              # Clean Rust projects
     .\disk-cleaner.ps1 -Lang rust, node -DryRun                # Dry run Rust + Node
     .\disk-cleaner.ps1 -Lang all -DryRun -Path C:\projects     # Dry run all languages
     .\disk-cleaner.ps1 -Lang node -Exclude myapp               # Node except myapp
+    .\disk-cleaner.ps1 -Lang all -JsonOutput                   # JSON event stream
     .\disk-cleaner.ps1 -ListProfiles                           # List profiles
 
 "@
@@ -306,21 +321,75 @@ function Test-ShouldClean {
     return $true
 }
 
-function Get-DirSizeFormatted {
+function Get-DirSizeBytes {
     param([string]$DirPath)
     if (Test-Path $DirPath) {
         try {
             $size = (Get-ChildItem -Path $DirPath -Recurse -File -ErrorAction SilentlyContinue | Measure-Object -Property Length -Sum).Sum
-            if ($null -eq $size) { $size = 0 }
-            if ($size -ge 1GB) { return "$([math]::Round($size / 1GB, 2)) GiB" }
-            if ($size -ge 1MB) { return "$([math]::Round($size / 1MB, 2)) MiB" }
-            if ($size -ge 1KB) { return "$([math]::Round($size / 1KB, 2)) KiB" }
-            return "$size B"
+            if ($null -eq $size) { return [long]0 }
+            return [long]$size
         } catch {
-            return "unknown size"
+            return [long]0
         }
     }
-    return "0 B"
+    return [long]0
+}
+
+function Format-Size {
+    param([long]$Bytes)
+    if ($Bytes -ge 1GB) { return "$([math]::Round($Bytes / 1GB, 2)) GiB" }
+    if ($Bytes -ge 1MB) { return "$([math]::Round($Bytes / 1MB, 2)) MiB" }
+    if ($Bytes -ge 1KB) { return "$([math]::Round($Bytes / 1KB, 2)) KiB" }
+    return "$Bytes B"
+}
+
+function Get-DirSizeFormatted {
+    param([string]$DirPath)
+    return Format-Size -Bytes (Get-DirSizeBytes -DirPath $DirPath)
+}
+
+# ─── JSON Output ─────────────────────────────────────────────────────────────────
+
+function Write-JsonEvent {
+    param([hashtable]$Event)
+    $Event["timestamp"] = (Get-Date -Format "o")
+    $json = $Event | ConvertTo-Json -Compress
+    Write-Output $json
+}
+
+# ─── Per-Profile Cleaning ────────────────────────────────────────────────────────
+
+# ─── Spinner ──────────────────────────────────────────────────────────────────────
+
+function Start-Spinner {
+    param([string]$Message)
+    if ($JsonOutput) { return }
+    Write-Progress -Id 2 -Activity $Message -Status "Please wait..."
+}
+
+function Stop-Spinner {
+    Write-Progress -Id 2 -Activity " " -Completed
+}
+
+# ─── Cancel Support ───────────────────────────────────────────────────────────────
+
+$script:cancelled = $false
+
+trap {
+    $script:cancelled = $true
+    Stop-Spinner
+    Write-Host ""
+    if ($JsonOutput) {
+        Write-JsonEvent @{ event = "cancelled" }
+    } else {
+        Write-Host "Cancelled by user." -ForegroundColor Yellow
+        if ($grandTotalCleaned -gt 0 -or $grandTotalSizeBytes -gt 0) {
+            Write-Host "  Cleaned so far: $grandTotalCleaned projects, $(Format-Size -Bytes $grandTotalSizeBytes) freed" -ForegroundColor DarkGray
+        }
+    }
+    Write-Progress -Id 0 -Activity "disk-cleaner" -Completed
+    Write-Progress -Id 1 -Activity " " -Completed
+    break
 }
 
 # ─── Per-Profile Cleaning ────────────────────────────────────────────────────────
@@ -328,17 +397,17 @@ function Get-DirSizeFormatted {
 $grandTotalProjects = 0
 $grandTotalCleaned = 0
 $grandTotalSkipped = 0
-$grandTotalRemovedFiles = 0
-$grandTotalSizeMiB = 0
+$grandTotalSizeBytes = [long]0
 
 function Invoke-CleanProfile {
-    param([string]$Profile)
+    param([string]$Profile, [int]$ProfileIndex, [int]$ProfileCount)
 
     $pName = Get-TomlValue -Data $tomlData -Key "profiles.$Profile.name"
     $pMarker = Get-TomlValue -Data $tomlData -Key "profiles.$Profile.marker"
     $pType = Get-TomlValue -Data $tomlData -Key "profiles.$Profile.type"
     $pCommand = Get-TomlValue -Data $tomlData -Key "profiles.$Profile.command"
     $pOutputPattern = Get-TomlValue -Data $tomlData -Key "profiles.$Profile.output_pattern"
+    $pCleanDir = Get-TomlValue -Data $tomlData -Key "profiles.$Profile.clean_dir"
     $pWrapper = Get-TomlValue -Data $tomlData -Key "profiles.$Profile.wrapper_windows"
     if ([string]::IsNullOrEmpty($pWrapper)) {
         $pWrapper = Get-TomlValue -Data $tomlData -Key "profiles.$Profile.wrapper"
@@ -349,19 +418,31 @@ function Invoke-CleanProfile {
     $pOptionalTargets = Get-TomlArray -Data $tomlData -Key "profiles.$Profile.optional_targets"
     $pRecursiveTargets = Get-TomlArray -Data $tomlData -Key "profiles.$Profile.recursive_targets"
 
-    Write-Host ""
-    Write-Host "--- $pName ---" -ForegroundColor Cyan
-    Write-Host "Scanning for $pName projects in: $Path" -ForegroundColor Cyan
+    if ($JsonOutput) {
+        Write-JsonEvent @{ event = "scan_start"; profile = $Profile; name = $pName; path = $Path }
+    } else {
+        Write-Host ""
+        Write-Host "--- $pName [$ProfileIndex/$ProfileCount] ---" -ForegroundColor Cyan
+        Write-Host "Scanning for $pName projects in: $Path" -ForegroundColor Cyan
 
-    if ($All) {
-        Write-Host "Mode: ALL (ignoring Exclude/Include filters)" -ForegroundColor Magenta
+        if ($All) {
+            Write-Host "Mode: ALL (ignoring Exclude/Include filters)" -ForegroundColor Magenta
+        }
     }
+
+    # Update overall progress
+    Write-Progress -Id 0 -Activity "disk-cleaner" `
+        -Status "Profile $ProfileIndex/$ProfileCount : $pName" `
+        -PercentComplete (($ProfileIndex - 1) / $ProfileCount * 100)
 
     # Find projects by marker files
     $allMarkers = @($pMarker) + $pAltMarkers
     $foundDirs = [System.Collections.ArrayList]::new()
 
+    Start-Spinner -Message "Scanning for $pName projects..."
+
     foreach ($marker in $allMarkers) {
+        if ($script:cancelled) { Stop-Spinner; return }
         $files = Get-ChildItem -Path $Path -Recurse -Filter $marker -ErrorAction SilentlyContinue
         foreach ($f in $files) {
             $dir = $f.DirectoryName
@@ -370,6 +451,8 @@ function Invoke-CleanProfile {
             }
         }
     }
+
+    Stop-Spinner
 
     $foundDirs = $foundDirs | Sort-Object
 
@@ -385,17 +468,21 @@ function Invoke-CleanProfile {
         }
     }
 
-    Write-Host ""
-    Write-Host "Found $($foundDirs.Count) $pName projects" -ForegroundColor Cyan
-    Write-Host "  To clean: $($toClean.Count)" -ForegroundColor Green
-    Write-Host "  Skipped:  $($skipped.Count)" -ForegroundColor Yellow
+    if ($JsonOutput) {
+        Write-JsonEvent @{ event = "scan_complete"; profile = $Profile; found = $foundDirs.Count; to_clean = $toClean.Count; skipped = $skipped.Count }
+    } else {
+        Write-Host ""
+        Write-Host "Found $($foundDirs.Count) $pName projects" -ForegroundColor Cyan
+        Write-Host "  To clean: $($toClean.Count)" -ForegroundColor Green
+        Write-Host "  Skipped:  $($skipped.Count)" -ForegroundColor Yellow
+    }
 
     $script:grandTotalProjects += $foundDirs.Count
     $script:grandTotalCleaned += $toClean.Count
     $script:grandTotalSkipped += $skipped.Count
 
     # Show skipped
-    if ($skipped.Count -gt 0 -and -not $All -and ($Exclude.Count -gt 0 -or $Include.Count -gt 0)) {
+    if (-not $JsonOutput -and $skipped.Count -gt 0 -and -not $All -and ($Exclude.Count -gt 0 -or $Include.Count -gt 0)) {
         Write-Host ""
         Write-Host "Skipped projects:" -ForegroundColor Yellow
         foreach ($s in $skipped) {
@@ -406,51 +493,106 @@ function Invoke-CleanProfile {
 
     # Nothing to clean
     if ($toClean.Count -eq 0) { return }
+    if ($script:cancelled) { return }
 
     # Dry run
     if ($DryRun) {
-        Write-Host ""
-        Write-Host "[DRY RUN] Would clean:" -ForegroundColor Magenta
-        foreach ($dir in $toClean) {
-            $rel = Get-RelativePath -FullPath $dir
-            Write-Host "  - $rel" -ForegroundColor White
-            if ($pType -eq "remove") {
-                foreach ($t in $pTargets) {
-                    $tp = Join-Path $dir $t
-                    if (Test-Path $tp) {
-                        $sz = Get-DirSizeFormatted -DirPath $tp
-                        Write-Host "    remove: $t ($sz)" -ForegroundColor DarkGray
+        if ($JsonOutput) {
+            foreach ($dir in $toClean) {
+                $rel = Get-RelativePath -FullPath $dir
+                $dryInfo = @{ event = "dry_run"; profile = $Profile; project = $rel }
+                if ($pType -eq "remove") {
+                    $targets = @()
+                    foreach ($t in ($pTargets + $pOptionalTargets)) {
+                        $tp = Join-Path $dir $t
+                        if (Test-Path $tp) {
+                            $sz = Get-DirSizeBytes -DirPath $tp
+                            $targets += @{ name = $t; size_bytes = $sz }
+                        }
+                    }
+                    $dryInfo["targets"] = $targets
+                } elseif ($pType -eq "command") {
+                    $cmd = $pCommand
+                    if ($pWrapper -and (Test-Path (Join-Path $dir $pWrapper))) { $cmd = "$pWrapper clean" }
+                    $dryInfo["command"] = $cmd
+                    if ($pCleanDir) {
+                        $cdp = Join-Path $dir $pCleanDir
+                        if (Test-Path $cdp) {
+                            $dryInfo["estimated_size_bytes"] = (Get-DirSizeBytes -DirPath $cdp)
+                        }
                     }
                 }
-                foreach ($t in $pOptionalTargets) {
-                    $tp = Join-Path $dir $t
-                    if (Test-Path $tp) {
-                        $sz = Get-DirSizeFormatted -DirPath $tp
-                        Write-Host "    remove: $t ($sz)" -ForegroundColor DarkGray
+                Write-JsonEvent $dryInfo
+            }
+        } else {
+            Write-Host ""
+            Write-Host "[DRY RUN] Would clean:" -ForegroundColor Magenta
+            foreach ($dir in $toClean) {
+                $rel = Get-RelativePath -FullPath $dir
+                Write-Host "  - $rel" -ForegroundColor White
+                if ($pType -eq "remove") {
+                    foreach ($t in $pTargets) {
+                        $tp = Join-Path $dir $t
+                        if (Test-Path $tp) {
+                            $sz = Get-DirSizeFormatted -DirPath $tp
+                            Write-Host "    remove: $t ($sz)" -ForegroundColor DarkGray
+                        }
+                    }
+                    foreach ($t in $pOptionalTargets) {
+                        $tp = Join-Path $dir $t
+                        if (Test-Path $tp) {
+                            $sz = Get-DirSizeFormatted -DirPath $tp
+                            Write-Host "    remove: $t ($sz)" -ForegroundColor DarkGray
+                        }
+                    }
+                    foreach ($t in $pRecursiveTargets) {
+                        $count = (Get-ChildItem -Path $dir -Recurse -Directory -Filter $t -ErrorAction SilentlyContinue).Count
+                        if ($count -gt 0) {
+                            Write-Host "    remove recursive: $t ($count found)" -ForegroundColor DarkGray
+                        }
+                    }
+                } elseif ($pType -eq "command") {
+                    $cmd = $pCommand
+                    if ($pWrapper -and (Test-Path (Join-Path $dir $pWrapper))) {
+                        $cmd = "$pWrapper clean"
+                    }
+                    Write-Host "    would run: $cmd" -ForegroundColor DarkGray
+                    if ($pCleanDir) {
+                        $cdp = Join-Path $dir $pCleanDir
+                        if (Test-Path $cdp) {
+                            $sz = Get-DirSizeFormatted -DirPath $cdp
+                            Write-Host "    $pCleanDir/ size: $sz" -ForegroundColor DarkGray
+                        }
                     }
                 }
-                foreach ($t in $pRecursiveTargets) {
-                    $count = (Get-ChildItem -Path $dir -Recurse -Directory -Filter $t -ErrorAction SilentlyContinue).Count
-                    if ($count -gt 0) {
-                        Write-Host "    remove recursive: $t ($count found)" -ForegroundColor DarkGray
-                    }
-                }
-            } elseif ($pType -eq "command") {
-                $cmd = $pCommand
-                if ($pWrapper -and (Test-Path (Join-Path $dir $pWrapper))) {
-                    $cmd = "$pWrapper clean"
-                }
-                Write-Host "    would run: $cmd" -ForegroundColor DarkGray
             }
         }
         return
     }
 
-    Write-Host ""
-    Write-Host "Cleaning $pName projects..." -ForegroundColor Cyan
-    Write-Host ""
+    if (-not $JsonOutput) {
+        Write-Host ""
+        Write-Host "Cleaning $pName projects..." -ForegroundColor Cyan
+        Write-Host ""
+    }
+
+    $profileSizeBytes = [long]0
+    $projectIndex = 0
 
     if ($Parallel -and $toClean.Count -gt 1 -and $pType -eq "command") {
+        # Measure sizes before parallel clean
+        $preSizes = @{}
+        if ($pCleanDir) {
+            foreach ($dir in $toClean) {
+                $cdp = Join-Path $dir $pCleanDir
+                if (Test-Path $cdp) {
+                    $preSizes[$dir] = Get-DirSizeBytes -DirPath $cdp
+                } else {
+                    $preSizes[$dir] = [long]0
+                }
+            }
+        }
+
         $jobs = @()
         foreach ($dir in $toClean) {
             $jobs += Start-Job -ScriptBlock {
@@ -464,22 +606,71 @@ function Invoke-CleanProfile {
             } -ArgumentList $dir, $pCommand, $pWrapper
         }
 
+        # Poll jobs for progress
+        $completedCount = 0
+        while ($completedCount -lt $jobs.Count) {
+            $doneJobs = $jobs | Where-Object { $_.State -eq "Completed" -or $_.State -eq "Failed" }
+            $newCompleted = $doneJobs.Count
+            if ($newCompleted -gt $completedCount) {
+                $completedCount = $newCompleted
+                $pct = [math]::Min(100, [int]($completedCount / $toClean.Count * 100))
+                Write-Progress -Id 1 -ParentId 0 -Activity "$pName" `
+                    -Status "$completedCount/$($toClean.Count) projects" `
+                    -PercentComplete $pct
+            }
+            if ($completedCount -lt $jobs.Count) {
+                Start-Sleep -Milliseconds 200
+            }
+        }
+
         $results = $jobs | Wait-Job | Receive-Job
         $jobs | Remove-Job
 
         foreach ($r in $results) {
             $rel = Get-RelativePath -FullPath $r.Dir
-            Write-Host "Cleaned: $rel" -ForegroundColor Green
-            if ($r.Result) {
-                Write-Host "  $($r.Result)" -ForegroundColor DarkGray
+            $sizeFreed = $preSizes[$r.Dir]
+            if ($null -eq $sizeFreed) { $sizeFreed = [long]0 }
+            $profileSizeBytes += $sizeFreed
+
+            if ($JsonOutput) {
+                Write-JsonEvent @{
+                    event = "clean_complete"; profile = $Profile; project = $rel
+                    size_bytes = $sizeFreed; cumulative_bytes = $profileSizeBytes
+                }
+            } else {
+                $szFmt = Format-Size -Bytes $sizeFreed
+                $cumFmt = Format-Size -Bytes $profileSizeBytes
+                Write-Host "Cleaned: $rel" -ForegroundColor Green -NoNewline
+                Write-Host " | freed: $szFmt | total: $cumFmt" -ForegroundColor DarkGray
             }
         }
+
+        Write-Progress -Id 1 -ParentId 0 -Activity "$pName" -Completed
     } else {
         foreach ($dir in $toClean) {
+            if ($script:cancelled) { break }
+            $projectIndex++
             $rel = Get-RelativePath -FullPath $dir
+            $pct = [math]::Min(100, [int]($projectIndex / $toClean.Count * 100))
+
+            Write-Progress -Id 1 -ParentId 0 -Activity "$pName" `
+                -Status "[$projectIndex/$($toClean.Count)] $rel" `
+                -PercentComplete $pct
 
             if ($pType -eq "command") {
-                Write-Host "Cleaning: $rel" -ForegroundColor White -NoNewline
+                # Measure build dir size before cleaning
+                $sizeFreed = [long]0
+                if ($pCleanDir) {
+                    $cdp = Join-Path $dir $pCleanDir
+                    if (Test-Path $cdp) {
+                        $sizeFreed = Get-DirSizeBytes -DirPath $cdp
+                    }
+                }
+
+                if (-not $JsonOutput) {
+                    Write-Host "[$projectIndex/$($toClean.Count)] " -ForegroundColor DarkGray -NoNewline
+                    Write-Host "Cleaning: $rel" -ForegroundColor White -NoNewline
+                }
 
                 Push-Location $dir
                 $cmd = $pCommand
@@ -489,44 +680,55 @@ function Invoke-CleanProfile {
                 $result = Invoke-Expression $cmd 2>&1 | Out-String
                 Pop-Location
 
-                if ($result -match "Removed (\d+) files") {
-                    $files = [int]$Matches[1]
-                    $script:grandTotalRemovedFiles += $files
-                    if ($result -match "([\d.]+)\s*(GiB|MiB|KiB)") {
-                        $size = [double]$Matches[1]
-                        $unit = $Matches[2]
-                        switch ($unit) {
-                            "GiB" { $script:grandTotalSizeMiB += $size * 1024 }
-                            "MiB" { $script:grandTotalSizeMiB += $size }
-                            "KiB" { $script:grandTotalSizeMiB += $size / 1024 }
-                        }
+                $profileSizeBytes += $sizeFreed
+
+                if ($JsonOutput) {
+                    $evt = @{
+                        event = "clean_complete"; profile = $Profile; project = $rel
+                        size_bytes = $sizeFreed; cumulative_bytes = $profileSizeBytes
                     }
-                    Write-Host " - $($result.Trim())" -ForegroundColor DarkGray
-                } elseif ($result -match "error:") {
-                    Write-Host " - Error" -ForegroundColor Red
-                    Write-Host "  $($result.Trim())" -ForegroundColor DarkRed
+                    if ($result -match "error:") { $evt["error"] = $result.Trim() }
+                    Write-JsonEvent $evt
                 } else {
-                    Write-Host " - Done" -ForegroundColor DarkGray
+                    $szFmt = Format-Size -Bytes $sizeFreed
+                    $cumFmt = Format-Size -Bytes $profileSizeBytes
+                    if ($result -match "error:") {
+                        Write-Host " - Error" -ForegroundColor Red
+                        Write-Host "  $($result.Trim())" -ForegroundColor DarkRed
+                    } else {
+                        Write-Host " | freed: $szFmt | total: $cumFmt" -ForegroundColor DarkGray
+                    }
                 }
 
             } elseif ($pType -eq "remove") {
-                Write-Host "Cleaning: $rel" -ForegroundColor White
+                if (-not $JsonOutput) {
+                    Write-Host "[$projectIndex/$($toClean.Count)] " -ForegroundColor DarkGray -NoNewline
+                    Write-Host "Cleaning: $rel" -ForegroundColor White
+                }
+
+                $projectSizeBytes = [long]0
 
                 foreach ($t in $pTargets) {
                     $tp = Join-Path $dir $t
                     if (Test-Path $tp) {
-                        $sz = Get-DirSizeFormatted -DirPath $tp
+                        $sz = Get-DirSizeBytes -DirPath $tp
+                        $projectSizeBytes += $sz
                         Remove-Item -Path $tp -Recurse -Force -ErrorAction SilentlyContinue
-                        Write-Host "  removed: $t ($sz)" -ForegroundColor DarkGray
+                        if (-not $JsonOutput) {
+                            Write-Host "  removed: $t ($(Format-Size -Bytes $sz))" -ForegroundColor DarkGray
+                        }
                     }
                 }
 
                 foreach ($t in $pOptionalTargets) {
                     $tp = Join-Path $dir $t
                     if (Test-Path $tp) {
-                        $sz = Get-DirSizeFormatted -DirPath $tp
+                        $sz = Get-DirSizeBytes -DirPath $tp
+                        $projectSizeBytes += $sz
                         Remove-Item -Path $tp -Recurse -Force -ErrorAction SilentlyContinue
-                        Write-Host "  removed: $t ($sz)" -ForegroundColor DarkGray
+                        if (-not $JsonOutput) {
+                            Write-Host "  removed: $t ($(Format-Size -Bytes $sz))" -ForegroundColor DarkGray
+                        }
                     }
                 }
 
@@ -534,46 +736,90 @@ function Invoke-CleanProfile {
                     $count = 0
                     $dirs = Get-ChildItem -Path $dir -Recurse -Directory -Filter $t -ErrorAction SilentlyContinue
                     foreach ($rd in $dirs) {
+                        $sz = Get-DirSizeBytes -DirPath $rd.FullName
+                        $projectSizeBytes += $sz
                         Remove-Item -Path $rd.FullName -Recurse -Force -ErrorAction SilentlyContinue
                         $count++
                     }
-                    if ($count -gt 0) {
+                    if ($count -gt 0 -and -not $JsonOutput) {
                         Write-Host "  removed recursive: $t ($count directories)" -ForegroundColor DarkGray
                     }
                 }
+
+                $profileSizeBytes += $projectSizeBytes
+
+                if ($JsonOutput) {
+                    Write-JsonEvent @{
+                        event = "clean_complete"; profile = $Profile; project = $rel
+                        size_bytes = $projectSizeBytes; cumulative_bytes = $profileSizeBytes
+                    }
+                } else {
+                    $cumFmt = Format-Size -Bytes $profileSizeBytes
+                    Write-Host "  project freed: $(Format-Size -Bytes $projectSizeBytes) | profile total: $cumFmt" -ForegroundColor Cyan
+                }
             }
         }
+
+        Write-Progress -Id 1 -ParentId 0 -Activity "$pName" -Completed
+    }
+
+    $script:grandTotalSizeBytes += $profileSizeBytes
+
+    if ($JsonOutput) {
+        Write-JsonEvent @{
+            event = "profile_complete"; profile = $Profile; name = $pName
+            cleaned = $toClean.Count; freed_bytes = $profileSizeBytes
+            cumulative_total_bytes = $script:grandTotalSizeBytes
+        }
+    } else {
+        Write-Host ""
+        Write-Host "$pName complete: $(Format-Size -Bytes $profileSizeBytes) freed" -ForegroundColor Green
     }
 }
 
 # ─── Main Execution ──────────────────────────────────────────────────────────────
 
-Write-Host "disk-cleaner - Multi-language project cleaner" -ForegroundColor Cyan
-Write-Host "Config: $Config" -ForegroundColor DarkGray
-Write-Host "Profiles: $($resolvedProfiles -join ', ')" -ForegroundColor DarkGray
-
-foreach ($profile in $resolvedProfiles) {
-    Invoke-CleanProfile -Profile $profile
+if ($JsonOutput) {
+    Write-JsonEvent @{
+        event = "start"; config = $Config
+        profiles = @($resolvedProfiles); path = $Path
+        dry_run = [bool]$DryRun; parallel = [bool]$Parallel
+    }
+} else {
+    Write-Host "disk-cleaner - Multi-language project cleaner" -ForegroundColor Cyan
+    Write-Host "Config: $Config" -ForegroundColor DarkGray
+    Write-Host "Profiles: $($resolvedProfiles -join ', ')" -ForegroundColor DarkGray
 }
+
+$profileIdx = 0
+foreach ($profile in $resolvedProfiles) {
+    if ($script:cancelled) { break }
+    $profileIdx++
+    Invoke-CleanProfile -Profile $profile -ProfileIndex $profileIdx -ProfileCount $resolvedProfiles.Count
+}
+
+Write-Progress -Id 0 -Activity "disk-cleaner" -Completed
 
 # ─── Grand Summary ────────────────────────────────────────────────────────────────
 
-Write-Host ""
-Write-Host ("=" * 50) -ForegroundColor Cyan
-Write-Host "Cleaning complete!" -ForegroundColor Green
-Write-Host "  Profiles run:       $($resolvedProfiles.Count) ($($resolvedProfiles -join ', '))" -ForegroundColor White
-Write-Host "  Projects found:     $grandTotalProjects" -ForegroundColor White
-Write-Host "  Projects cleaned:   $grandTotalCleaned" -ForegroundColor White
-Write-Host "  Projects skipped:   $grandTotalSkipped" -ForegroundColor White
-
-if ($grandTotalRemovedFiles -gt 0) {
-    Write-Host "  Total files removed: $grandTotalRemovedFiles" -ForegroundColor White
-}
-
-if ($grandTotalSizeMiB -gt 0) {
-    if ($grandTotalSizeMiB -ge 1024) {
-        Write-Host "  Total space freed:  $([math]::Round($grandTotalSizeMiB / 1024, 2)) GiB" -ForegroundColor White
-    } else {
-        Write-Host "  Total space freed:  $([math]::Round($grandTotalSizeMiB, 2)) MiB" -ForegroundColor White
+if ($JsonOutput) {
+    Write-JsonEvent @{
+        event = "summary"
+        profiles_run = $resolvedProfiles.Count
+        profile_names = @($resolvedProfiles)
+        projects_found = $grandTotalProjects
+        projects_cleaned = $grandTotalCleaned
+        projects_skipped = $grandTotalSkipped
+        total_freed_bytes = $grandTotalSizeBytes
+        total_freed_formatted = (Format-Size -Bytes $grandTotalSizeBytes)
     }
+} else {
+    Write-Host ""
+    Write-Host ("=" * 50) -ForegroundColor Cyan
+    Write-Host "Cleaning complete!" -ForegroundColor Green
+    Write-Host "  Profiles run:       $($resolvedProfiles.Count) ($($resolvedProfiles -join ', '))" -ForegroundColor White
+    Write-Host "  Projects found:     $grandTotalProjects" -ForegroundColor White
+    Write-Host "  Projects cleaned:   $grandTotalCleaned" -ForegroundColor White
+    Write-Host "  Projects skipped:   $grandTotalSkipped" -ForegroundColor White
+    Write-Host "  Total space freed:  $(Format-Size -Bytes $grandTotalSizeBytes)" -ForegroundColor Green
 }
