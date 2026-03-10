@@ -8,7 +8,7 @@ Supports **Rust**, **Node.js**, **Java (Maven/Gradle)**, and **Python** out of t
 
 ```powershell
 # PowerShell (Windows)
-.\disk-cleaner.ps1 -Lang all -Path C:\projects
+powershell.exe -ExecutionPolicy Bypass -File "./disk-cleaner.ps1" -Lang all -Path "C:\projects"
 
 # Bash (Linux/macOS)
 ./bin/disk-cleaner --lang all -p ~/projects
@@ -18,8 +18,8 @@ Supports **Rust**, **Node.js**, **Java (Maven/Gradle)**, and **Python** out of t
 
 - **Multi-language** — detects projects by marker files (Cargo.lock, package-lock.json, pom.xml, etc.)
 - **Dry run** — preview what would be cleaned and how much space it occupies
-- **Progress tracking** — animated spinner during scanning, progress bars (PowerShell), and `[N/M]` counters during cleaning
-- **Cancellable** — press Ctrl+C to stop gracefully; prints a partial summary of work done so far
+- **Progress tracking** — animated text spinner during scanning, progress bars during cleaning, and `[N/M]` counters per project
+- **Cancellable** — press Ctrl+C for instant cancellation (even mid-scan); prints a partial summary of work done so far
 - **Size tracking** — measures and reports freed space per project, per profile, and grand total
 - **JSON output** — structured JSON lines for programmatic consumption, logging, or piping to `jq`
 - **Parallel mode** — cleans command-type profiles concurrently for faster execution
@@ -31,13 +31,14 @@ Supports **Rust**, **Node.js**, **Java (Maven/Gradle)**, and **Python** out of t
 ### PowerShell
 
 ```powershell
-.\disk-cleaner.ps1 -Lang rust                              # Clean Rust projects
-.\disk-cleaner.ps1 -Lang rust, node -DryRun                # Dry run Rust + Node
-.\disk-cleaner.ps1 -Lang all -DryRun -Path C:\projects     # Dry run all languages
-.\disk-cleaner.ps1 -Lang node -Exclude myapp               # Node except myapp
-.\disk-cleaner.ps1 -Lang all -Parallel                     # Parallel cleaning
-.\disk-cleaner.ps1 -Lang all -JsonOutput                   # JSON event stream
-.\disk-cleaner.ps1 -ListProfiles                           # List available profiles
+# Prefix all commands with: powershell.exe -ExecutionPolicy Bypass -File
+powershell.exe -ExecutionPolicy Bypass -File "./disk-cleaner.ps1" -Lang rust
+powershell.exe -ExecutionPolicy Bypass -File "./disk-cleaner.ps1" -Lang rust, node -DryRun
+powershell.exe -ExecutionPolicy Bypass -File "./disk-cleaner.ps1" -Lang all -DryRun -Path "C:\projects"
+powershell.exe -ExecutionPolicy Bypass -File "./disk-cleaner.ps1" -Lang node -Exclude myapp
+powershell.exe -ExecutionPolicy Bypass -File "./disk-cleaner.ps1" -Lang all -Parallel
+powershell.exe -ExecutionPolicy Bypass -File "./disk-cleaner.ps1" -Lang all -JsonOutput
+powershell.exe -ExecutionPolicy Bypass -File "./disk-cleaner.ps1" -ListProfiles
 ```
 
 ### Bash
