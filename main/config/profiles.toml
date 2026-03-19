@@ -1,4 +1,4 @@
-# disk-cleaner.toml - Multi-language project cleaning configuration
+# profiles.toml - Multi-language project profile configuration
 # Single-line values only (no multi-line arrays or strings)
 #
 # Profile fields:
@@ -18,6 +18,10 @@
 #   targets           Directories to delete (e.g. node_modules, .venv)
 #   optional_targets  Directories to delete only if they exist (e.g. .next, dist)
 #   recursive_targets Directories to find and delete recursively (e.g. __pycache__)
+#
+# Search fields:
+#   source_extensions File extensions to search for text content (e.g. .rs, .js, .py)
+#   search_exclude    Directories to skip during text search (defaults to targets/clean_dir)
 
 [settings]
 default_path = ""
@@ -30,6 +34,8 @@ type = "command"
 command = "cargo clean"
 clean_dir = "target"
 output_pattern = 'Removed (\d+) files'
+source_extensions = [".rs", ".toml"]
+search_exclude = ["target"]
 
 [profiles.node]
 name = "Node.js"
@@ -38,6 +44,8 @@ alt_markers = ["yarn.lock", "pnpm-lock.yaml", "bun.lock"]
 type = "remove"
 targets = ["node_modules"]
 optional_targets = [".next", ".nuxt", "dist"]
+source_extensions = [".js", ".ts", ".jsx", ".tsx", ".mjs", ".cjs", ".json"]
+search_exclude = ["node_modules", ".next", ".nuxt", "dist"]
 
 [profiles.java-maven]
 name = "Java (Maven)"
@@ -47,6 +55,8 @@ command = "mvn clean"
 wrapper = "./mvnw"
 wrapper_windows = ".\\mvnw.cmd"
 clean_dir = "target"
+source_extensions = [".java", ".xml", ".properties"]
+search_exclude = ["target"]
 
 [profiles.java-gradle]
 name = "Java (Gradle)"
@@ -57,6 +67,8 @@ command = "gradle clean"
 wrapper = "./gradlew"
 wrapper_windows = ".\\gradlew.bat"
 clean_dir = "build"
+source_extensions = [".java", ".kt", ".kts", ".gradle", ".properties"]
+search_exclude = ["build"]
 
 [profiles.python]
 name = "Python"
@@ -65,3 +77,5 @@ alt_markers = ["setup.py", "requirements.txt"]
 type = "remove"
 targets = [".venv", "venv", ".mypy_cache", ".pytest_cache", ".ruff_cache", "dist", "build"]
 recursive_targets = ["__pycache__"]
+source_extensions = [".py", ".pyi", ".toml", ".cfg"]
+search_exclude = [".venv", "venv", "__pycache__", ".mypy_cache", "dist", "build"]

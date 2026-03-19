@@ -1,31 +1,37 @@
 #!/bin/bash
 
-# disk-cleaner - Multi-language project cleaner
+# disk-cleaner - Multi-language project workspace tool
 #
-# Configurable cleaning tool that uses disk-cleaner.toml to define language profiles.
-# Supports Rust, Node.js, Java (Maven/Gradle), Python, and more.
+# Commands:
+#   clean           Remove build artifacts from detected projects (default)
+#   search          Find and report projects without modifying them
+#   list-profiles   Show available language profiles
+#   help            Show usage information
 
 # Resolve project root (parent of bin/)
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
-# Source libraries
+# Source shared libraries
 source "$PROJECT_ROOT/main/src/lib/common.sh"
 source "$PROJECT_ROOT/main/src/lib/toml-parser.sh"
-source "$PROJECT_ROOT/main/src/clean-profile.sh"
+
+# Source features
+source "$PROJECT_ROOT/main/features/clean/clean.sh"
+source "$PROJECT_ROOT/main/features/search/search.sh"
 
 # Defaults
+COMMAND=""
 DRY_RUN=false
 PARALLEL=false
 ALL=false
 JSON_OUTPUT=false
 SEARCH_PATH=""
 LIST_PROFILES=false
-CONFIG_FILE="$PROJECT_ROOT/disk-cleaner.toml"
 declare -a EXCLUDE_PATTERNS=()
 declare -a INCLUDE_PATTERNS=()
 declare -a LANG_PROFILES=()
 
-# Grand totals (modified by clean_profile)
+# Grand totals (modified by features)
 grand_total_projects=0
 grand_total_cleaned=0
 grand_total_skipped=0
@@ -35,39 +41,69 @@ grand_total_size_bytes=0
 
 show_help() {
     cat << 'EOF'
-disk-cleaner - Multi-language project cleaner
+disk-cleaner - Multi-language project workspace tool
 
 USAGE:
-    disk-cleaner [OPTIONS]
+    disk-cleaner <command> [OPTIONS]
 
-OPTIONS:
-    -l, --lang PROFILE      Language profile to clean (repeatable, or "all")
-    -c, --config FILE       Path to TOML config (default: disk-cleaner.toml in project root)
+COMMANDS:
+    clean             Remove build artifacts from detected projects (default)
+    search            Find and report projects without modifying them
+    list-profiles     Show available language profiles
+    help              Show this help message
+
+OPTIONS (shared):
+    -l, --lang PROFILE      Language profile to target (repeatable, or "all")
+    -c, --config FILE       Path to TOML config (default: main/config/profiles.toml)
     -L, --list-profiles     Show available profiles and exit
     -e, --exclude PATTERN   Exclude projects matching pattern (can be repeated)
     -i, --include PATTERN   Only include projects matching pattern (can be repeated)
-    -d, --dry-run           Show what would be cleaned without cleaning
     -p, --path PATH         Root path to search (defaults to config default or current dir)
-    -P, --parallel          Run clean operations in parallel
-    -a, --all               Clean all projects, ignoring Exclude/Include filters
+    -a, --all               Process all projects, ignoring Exclude/Include filters
     -j, --json              Emit structured JSON lines instead of colored text
     -h, --help              Show this help message
+
+OPTIONS (clean only):
+    -d, --dry-run           Show what would be cleaned without cleaning
+    -P, --parallel          Run clean operations in parallel
 
 Press Ctrl+C at any time to cancel. A partial summary is printed on exit.
 
 EXAMPLES:
-    disk-cleaner --lang rust                              # Clean Rust projects
-    disk-cleaner --lang rust --lang node -d               # Dry run Rust + Node
-    disk-cleaner --lang all -d -p /path/to/projects       # Dry run all languages
-    disk-cleaner --lang node -e myapp                     # Node except myapp
-    disk-cleaner --lang all --json                        # JSON event stream
-    disk-cleaner -L                                       # List profiles
+    disk-cleaner clean --lang rust
+    disk-cleaner clean --lang rust --lang node -d
+    disk-cleaner search --lang all -p /path/to/projects
+    disk-cleaner search --lang rust --json
+    disk-cleaner --lang rust                              # clean is default
+    disk-cleaner list-profiles
 
 EOF
     exit 0
 }
 
+# ─── Resolve Config Path ────────────────────────────────────────────────────────
+
+resolve_config() {
+    if [[ -z "$CONFIG_FILE" ]]; then
+        CONFIG_FILE="$PROJECT_ROOT/main/config/profiles.toml"
+        # Fallback to legacy location
+        if [[ ! -f "$CONFIG_FILE" ]]; then
+            CONFIG_FILE="$PROJECT_ROOT/disk-cleaner.toml"
+        fi
+    fi
+}
+
 # ─── Argument Parsing ────────────────────────────────────────────────────────────
+
+# First arg may be a command
+if [[ $# -gt 0 ]]; then
+    case "$1" in
+        clean|search|list-profiles|help)
+            COMMAND="$1"
+            shift
+            ;;
+    esac
+fi
 
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -122,13 +158,28 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
+# Handle -L shortcut
+if [[ "$LIST_PROFILES" == true ]]; then
+    COMMAND="list-profiles"
+fi
+
+# Default command
+if [[ -z "$COMMAND" ]]; then
+    COMMAND="clean"
+fi
+
+if [[ "$COMMAND" == "help" ]]; then
+    show_help
+fi
+
 # ─── Load Config ─────────────────────────────────────────────────────────────────
 
+resolve_config
 parse_toml "$CONFIG_FILE"
 
 # ─── List Profiles ───────────────────────────────────────────────────────────────
 
-if [[ "$LIST_PROFILES" == true ]]; then
+if [[ "$COMMAND" == "list-profiles" ]]; then
     echo -e "${CYAN}Available profiles (from $CONFIG_FILE):${NC}"
     echo ""
     for profile in "${TOML_PROFILES[@]}"; do
@@ -144,22 +195,19 @@ fi
 
 # ─── Resolve Profiles ───────────────────────────────────────────────────────────
 
-# If no --lang specified, use default_profiles from config
 if [[ ${#LANG_PROFILES[@]} -eq 0 ]]; then
     toml_get_array "settings.default_profiles" LANG_PROFILES
 fi
 
-# Handle "all" — expand to all defined profiles
 declare -a RESOLVED_PROFILES=()
 for lp in "${LANG_PROFILES[@]}"; do
     if [[ "$lp" == "all" ]]; then
         RESOLVED_PROFILES=("${TOML_PROFILES[@]}")
         break
     else
-        # Validate profile exists
         if [[ -z "$(toml_get "profiles.${lp}.name")" ]]; then
             echo -e "${RED}Unknown profile: $lp${NC}"
-            echo "Use --list-profiles to see available profiles"
+            echo "Use list-profiles or --list-profiles to see available profiles"
             exit 1
         fi
         RESOLVED_PROFILES+=("$lp")
@@ -183,40 +231,75 @@ if [[ -z "$SEARCH_PATH" ]]; then
     fi
 fi
 
-# ─── Cancel Trap ────────────────────────────────────────────────────────────────
+# ─── Cancel Trap ─────────────────────────────────────────────────────────────────
 
 trap cancel_cleanup SIGINT
 
-# ─── Main Execution ─────────────────────────────────────────────────────────────
-
-if [[ "$JSON_OUTPUT" == true ]]; then
-    emit_json_event "{\"event\":\"start\",\"config\":\"$CONFIG_FILE\",\"profiles\":[$(printf '\"%s\",' "${LANG_PROFILES[@]}" | sed 's/,$//')],\"path\":\"$SEARCH_PATH\",\"dry_run\":$DRY_RUN,\"parallel\":$PARALLEL}"
-else
-    echo -e "${CYAN}disk-cleaner - Multi-language project cleaner${NC}"
-    echo -e "${GRAY}Config: $CONFIG_FILE${NC}"
-    echo -e "${GRAY}Profiles: ${LANG_PROFILES[*]}${NC}"
-fi
+# ─── Dispatch Command ───────────────────────────────────────────────────────────
 
 profile_idx=0
 profile_count=${#LANG_PROFILES[@]}
-for profile in "${LANG_PROFILES[@]}"; do
-    [[ "$CANCELLED" == true ]] && break
-    profile_idx=$((profile_idx + 1))
-    clean_profile "$profile" "$profile_idx" "$profile_count"
-done
 
-# ─── Grand Summary ───────────────────────────────────────────────────────────────
+case "$COMMAND" in
+    clean)
+        if [[ "$JSON_OUTPUT" == true ]]; then
+            emit_json_event "{\"event\":\"start\",\"command\":\"clean\",\"config\":\"$CONFIG_FILE\",\"profiles\":[$(printf '\"%s\",' "${LANG_PROFILES[@]}" | sed 's/,$//')],\"path\":\"$SEARCH_PATH\",\"dry_run\":$DRY_RUN,\"parallel\":$PARALLEL}"
+        else
+            echo -e "${CYAN}disk-cleaner clean - Build artifact cleaner${NC}"
+            echo -e "${GRAY}Config: $CONFIG_FILE${NC}"
+            echo -e "${GRAY}Profiles: ${LANG_PROFILES[*]}${NC}"
+        fi
 
-if [[ "$JSON_OUTPUT" == true ]]; then
-    local_freed_fmt=$(format_size "$grand_total_size_bytes")
-    emit_json_event "{\"event\":\"summary\",\"profiles_run\":${#LANG_PROFILES[@]},\"projects_found\":$grand_total_projects,\"projects_cleaned\":$grand_total_cleaned,\"projects_skipped\":$grand_total_skipped,\"total_freed_bytes\":$grand_total_size_bytes,\"total_freed_formatted\":\"$local_freed_fmt\"}"
-else
-    echo ""
-    echo -e "${CYAN}==================================================${NC}"
-    echo -e "${GREEN}Cleaning complete!${NC}"
-    echo -e "${WHITE}  Profiles run:       ${#LANG_PROFILES[@]} (${LANG_PROFILES[*]})${NC}"
-    echo -e "${WHITE}  Projects found:     $grand_total_projects${NC}"
-    echo -e "${WHITE}  Projects cleaned:   $grand_total_cleaned${NC}"
-    echo -e "${WHITE}  Projects skipped:   $grand_total_skipped${NC}"
-    echo -e "${GREEN}  Total space freed:  $(format_size "$grand_total_size_bytes")${NC}"
-fi
+        for profile in "${LANG_PROFILES[@]}"; do
+            [[ "$CANCELLED" == true ]] && break
+            profile_idx=$((profile_idx + 1))
+            clean_profile "$profile" "$profile_idx" "$profile_count"
+        done
+
+        # Summary
+        if [[ "$JSON_OUTPUT" == true ]]; then
+            local_freed_fmt=$(format_size "$grand_total_size_bytes")
+            emit_json_event "{\"event\":\"summary\",\"command\":\"clean\",\"profiles_run\":${#LANG_PROFILES[@]},\"projects_found\":$grand_total_projects,\"projects_cleaned\":$grand_total_cleaned,\"projects_skipped\":$grand_total_skipped,\"total_freed_bytes\":$grand_total_size_bytes,\"total_freed_formatted\":\"$local_freed_fmt\"}"
+        else
+            echo ""
+            echo -e "${CYAN}==================================================${NC}"
+            echo -e "${GREEN}Cleaning complete!${NC}"
+            echo -e "${WHITE}  Profiles run:       ${#LANG_PROFILES[@]} (${LANG_PROFILES[*]})${NC}"
+            echo -e "${WHITE}  Projects found:     $grand_total_projects${NC}"
+            echo -e "${WHITE}  Projects cleaned:   $grand_total_cleaned${NC}"
+            echo -e "${WHITE}  Projects skipped:   $grand_total_skipped${NC}"
+            echo -e "${GREEN}  Total space freed:  $(format_size "$grand_total_size_bytes")${NC}"
+        fi
+        ;;
+
+    search)
+        if [[ "$JSON_OUTPUT" == true ]]; then
+            emit_json_event "{\"event\":\"start\",\"command\":\"search\",\"config\":\"$CONFIG_FILE\",\"profiles\":[$(printf '\"%s\",' "${LANG_PROFILES[@]}" | sed 's/,$//')],\"path\":\"$SEARCH_PATH\"}"
+        else
+            echo -e "${CYAN}disk-cleaner search - Project finder${NC}"
+            echo -e "${GRAY}Config: $CONFIG_FILE${NC}"
+            echo -e "${GRAY}Profiles: ${LANG_PROFILES[*]}${NC}"
+        fi
+
+        for profile in "${LANG_PROFILES[@]}"; do
+            [[ "$CANCELLED" == true ]] && break
+            profile_idx=$((profile_idx + 1))
+            search_profile "$profile" "$profile_idx" "$profile_count"
+        done
+
+        # Summary
+        if [[ "$JSON_OUTPUT" == true ]]; then
+            local_size_fmt=$(format_size "$grand_total_size_bytes")
+            emit_json_event "{\"event\":\"summary\",\"command\":\"search\",\"profiles_run\":${#LANG_PROFILES[@]},\"projects_found\":$grand_total_projects,\"projects_matched\":$grand_total_cleaned,\"projects_skipped\":$grand_total_skipped,\"total_artifact_bytes\":$grand_total_size_bytes,\"total_artifact_formatted\":\"$local_size_fmt\"}"
+        else
+            echo ""
+            echo -e "${CYAN}==================================================${NC}"
+            echo -e "${GREEN}Search complete!${NC}"
+            echo -e "${WHITE}  Profiles searched:  ${#LANG_PROFILES[@]} (${LANG_PROFILES[*]})${NC}"
+            echo -e "${WHITE}  Projects found:     $grand_total_projects${NC}"
+            echo -e "${WHITE}  Projects matched:   $grand_total_cleaned${NC}"
+            echo -e "${WHITE}  Projects skipped:   $grand_total_skipped${NC}"
+            echo -e "${YELLOW}  Total artifact size: $(format_size "$grand_total_size_bytes")${NC}"
+        fi
+        ;;
+esac
