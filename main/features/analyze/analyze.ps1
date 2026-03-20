@@ -281,6 +281,186 @@ class ArtifactAnalyzer {
     }
 }
 
+# ─── Build Benchmarker ───────────────────────────────────────────────────────────
+
+class BuildBenchmarker {
+    [CleanProfile]   $Profile
+    [CleanerContext]  $Ctx
+
+    BuildBenchmarker([CleanProfile]$profile, [CleanerContext]$ctx) {
+        $this.Profile = $profile
+        $this.Ctx     = $ctx
+    }
+
+    [void] Run([int]$profileIndex, [int]$profileCount) {
+        $p = $this.Profile
+        $w = $this.Ctx.Writer
+
+        if ([string]::IsNullOrEmpty($p.BuildCommand)) {
+            $w.BlankLine()
+            $w.Text("--- $($p.Name) [$profileIndex/$profileCount] ---", "Cyan")
+            $w.Text("No build_command configured for $($p.Name), skipping benchmark.", "DarkGray")
+            return
+        }
+
+        $w.BlankLine()
+        $w.Text("--- $($p.Name) Benchmark [$profileIndex/$profileCount] ---", "Cyan")
+        $w.Text("Build command: $($p.BuildCommand)", "DarkGray")
+
+        Write-Progress -Id 0 -Activity "disk-cleaner benchmark" `
+            -Status "Profile $profileIndex/$profileCount : $($p.Name)" `
+            -PercentComplete (($profileIndex - 1) / $profileCount * 100)
+
+        # Scan and filter
+        $foundDirs = $this.Ctx.ScanForProjects($p)
+        $filtered = $this.Ctx.FilterProjects($foundDirs)
+        $toTest = $filtered.ToProcess
+
+        if ($toTest.Count -eq 0) {
+            $w.Text("No $($p.Name) projects found.", "DarkGray")
+            return
+        }
+
+        $w.BlankLine()
+        $w.Text("Benchmarking $($toTest.Count) $($p.Name) projects...", "Cyan")
+        $w.BlankLine()
+
+        $results = [System.Collections.ArrayList]::new()
+        $projectIndex = 0
+
+        foreach ($dir in $toTest) {
+            if ($this.Ctx.Cancelled) { break }
+            $projectIndex++
+            $rel = $this.Ctx.RelativePath($dir)
+
+            $pct = [math]::Min(100, [int]($projectIndex / $toTest.Count * 100))
+            Write-Progress -Id 1 -ParentId 0 -Activity "$($p.Name) benchmark" `
+                -Status "[$projectIndex/$($toTest.Count)] $rel" `
+                -PercentComplete $pct
+
+            $timing = $this.BenchmarkProject($dir, $rel, $p.BuildCommand, $projectIndex, $toTest.Count)
+            if ($timing) {
+                [void]$results.Add($timing)
+            }
+        }
+
+        Write-Progress -Id 1 -ParentId 0 -Activity "$($p.Name) benchmark" -Completed
+
+        if ($results.Count -eq 0) { return }
+
+        # Sort by duration descending (slowest first)
+        $sorted = @($results | Sort-Object -Property DurationMs -Descending)
+
+        $w.BlankLine()
+        $w.Text("--- Build Time Rankings (slowest first) ---", "Cyan")
+        $w.BlankLine()
+
+        $rank = 0
+        foreach ($r in $sorted) {
+            $rank++
+            $durationStr = $this.FormatDuration($r.DurationMs)
+            $color = if ($r.DurationMs -ge 60000) { "Red" } elseif ($r.DurationMs -ge 10000) { "Yellow" } else { "Green" }
+            $status = if ($r.Success) { "" } else { " (FAILED)" }
+
+            $w.TextNoNewline("  [$rank] ", "DarkGray")
+            $w.TextNoNewline("$($r.Project)", "White")
+            $spaces = [math]::Max(1, 45 - $r.Project.Length)
+            $w.TextNoNewline((" " * $spaces), "White")
+            $w.Text("$durationStr$status", $color)
+
+            $w.Json(@{
+                event = "benchmark_result"
+                profile = $p.Key
+                project = $r.Project
+                duration_ms = $r.DurationMs
+                success = $r.Success
+                rank = $rank
+            })
+        }
+
+        # Stats
+        $successResults = @($sorted | Where-Object { $_.Success })
+        if ($successResults.Count -gt 0) {
+            $durations = $successResults | ForEach-Object { $_.DurationMs }
+            $totalMs = ($durations | Measure-Object -Sum).Sum
+            $avgMs = [math]::Round($totalMs / $successResults.Count)
+            $maxMs = ($durations | Measure-Object -Maximum).Maximum
+            $minMs = ($durations | Measure-Object -Minimum).Minimum
+
+            $w.BlankLine()
+            $w.Text("  Stats:", "Cyan")
+            $w.Text("    Slowest:  $($this.FormatDuration($maxMs))", "DarkGray")
+            $w.Text("    Fastest:  $($this.FormatDuration($minMs))", "DarkGray")
+            $w.Text("    Average:  $($this.FormatDuration($avgMs))", "DarkGray")
+            $w.Text("    Total:    $($this.FormatDuration($totalMs))", "DarkGray")
+
+            $w.Json(@{
+                event = "benchmark_stats"
+                profile = $p.Key
+                projects_benchmarked = $successResults.Count
+                slowest_ms = $maxMs
+                fastest_ms = $minMs
+                average_ms = $avgMs
+                total_ms = $totalMs
+            })
+        }
+    }
+
+    hidden [PSCustomObject] BenchmarkProject([string]$dir, [string]$rel, [string]$buildCmd, [int]$index, [int]$total) {
+        $w = $this.Ctx.Writer
+
+        $w.TextNoNewline("  [$index/$total] ", "DarkGray")
+        $w.TextNoNewline("Building: $rel ... ", "White")
+
+        $success = $true
+        $sw = [System.Diagnostics.Stopwatch]::StartNew()
+
+        try {
+            Push-Location $dir
+            $cmd = $buildCmd
+            $p = $this.Profile
+            if ($p.Wrapper -and (Test-Path $p.Wrapper)) {
+                $cmd = "$($p.Wrapper) build"
+            }
+            $result = Invoke-Expression "$cmd 2>&1" | Out-String
+            if ($LASTEXITCODE -and $LASTEXITCODE -ne 0) {
+                $success = $false
+            }
+        } catch {
+            $success = $false
+        } finally {
+            Pop-Location
+            $sw.Stop()
+        }
+
+        $durationMs = $sw.ElapsedMilliseconds
+        $durationStr = $this.FormatDuration($durationMs)
+        $color = if (-not $success) { "Red" } elseif ($durationMs -ge 60000) { "Yellow" } else { "Green" }
+        $statusSuffix = if (-not $success) { " FAILED" } else { "" }
+
+        if (-not $w.JsonMode) {
+            $w.Text("$durationStr$statusSuffix", $color)
+        }
+
+        return [PSCustomObject]@{
+            Project = $rel
+            DurationMs = $durationMs
+            Success = $success
+        }
+    }
+
+    [string] FormatDuration([long]$ms) {
+        if ($ms -ge 60000) {
+            $min = [math]::Floor($ms / 60000)
+            $sec = [math]::Round(($ms % 60000) / 1000, 1)
+            return "${min}m ${sec}s"
+        } elseif ($ms -ge 1000) {
+            return "$([math]::Round($ms / 1000, 2))s"
+        }
+        return "${ms}ms"
+    }
+}
+
 function Invoke-Analyze {
     param(
         [CleanerContext] $Ctx,
@@ -289,11 +469,20 @@ function Invoke-Analyze {
     )
 
     $w = $Ctx.Writer
-    $w.Json(@{
+    $isBenchmark = $Ctx.Benchmark
+
+    $startEvent = @{
         event = "start"; command = "analyze"
         profiles = @($ProfileKeys); path = $Ctx.SearchPath
-    })
-    $w.Text("disk-cleaner analyze - Space consumption report", "Cyan")
+    }
+    if ($isBenchmark) { $startEvent["benchmark"] = $true }
+    $w.Json($startEvent)
+
+    if ($isBenchmark) {
+        $w.Text("disk-cleaner analyze -Benchmark - Build time analysis", "Cyan")
+    } else {
+        $w.Text("disk-cleaner analyze - Space consumption report", "Cyan")
+    }
     $w.Text("Path: $($Ctx.SearchPath)", "DarkGray")
     $w.Text("Profiles: $($ProfileKeys -join ', ')", "DarkGray")
 
@@ -302,33 +491,47 @@ function Invoke-Analyze {
         if ($Ctx.Cancelled) { break }
         $profileIdx++
         $profile = [CleanProfile]::new($profileKey, $Toml)
-        $analyzer = [ArtifactAnalyzer]::new($profile, $Ctx)
-        $analyzer.Run($profileIdx, $ProfileKeys.Count)
+
+        if ($isBenchmark) {
+            $benchmarker = [BuildBenchmarker]::new($profile, $Ctx)
+            $benchmarker.Run($profileIdx, $ProfileKeys.Count)
+        } else {
+            $analyzer = [ArtifactAnalyzer]::new($profile, $Ctx)
+            $analyzer.Run($profileIdx, $ProfileKeys.Count)
+        }
     }
 
     Write-Progress -Id 0 -Activity "disk-cleaner analyze" -Completed
 
     # Summary
-    $w.Json(@{
+    $summaryEvent = @{
         event = "summary"; command = "analyze"
         profiles_run = $ProfileKeys.Count
         profile_names = @($ProfileKeys)
         projects_found = $Ctx.TotalProjects
-        projects_with_artifacts = $Ctx.TotalCleaned
-        projects_skipped = $Ctx.TotalSkipped
-        total_artifact_bytes = $Ctx.TotalSizeBytes
-        total_artifact_formatted = [CleanerContext]::FormatSize($Ctx.TotalSizeBytes)
-    })
+    }
+    if (-not $isBenchmark) {
+        $summaryEvent["projects_with_artifacts"] = $Ctx.TotalCleaned
+        $summaryEvent["projects_skipped"] = $Ctx.TotalSkipped
+        $summaryEvent["total_artifact_bytes"] = $Ctx.TotalSizeBytes
+        $summaryEvent["total_artifact_formatted"] = [CleanerContext]::FormatSize($Ctx.TotalSizeBytes)
+    }
+    $w.Json($summaryEvent)
 
     if (-not $w.JsonMode) {
         Write-Host ""
         Write-Host ("=" * 50) -ForegroundColor Cyan
-        Write-Host "Analysis complete!" -ForegroundColor Green
-        Write-Host "  Profiles analyzed:       $($ProfileKeys.Count) ($($ProfileKeys -join ', '))" -ForegroundColor White
-        Write-Host "  Projects found:          $($Ctx.TotalProjects)" -ForegroundColor White
-        Write-Host "  Projects with artifacts: $($Ctx.TotalCleaned)" -ForegroundColor White
-        Write-Host "  Projects skipped:        $($Ctx.TotalSkipped)" -ForegroundColor White
-        $sizeColor = if ($Ctx.TotalSizeBytes -ge 1GB) { "Red" } elseif ($Ctx.TotalSizeBytes -ge 100MB) { "Yellow" } else { "Green" }
-        Write-Host "  Total artifact size:     $([CleanerContext]::FormatSize($Ctx.TotalSizeBytes))" -ForegroundColor $sizeColor
+        if ($isBenchmark) {
+            Write-Host "Benchmark complete!" -ForegroundColor Green
+            Write-Host "  Profiles benchmarked:    $($ProfileKeys.Count) ($($ProfileKeys -join ', '))" -ForegroundColor White
+        } else {
+            Write-Host "Analysis complete!" -ForegroundColor Green
+            Write-Host "  Profiles analyzed:       $($ProfileKeys.Count) ($($ProfileKeys -join ', '))" -ForegroundColor White
+            Write-Host "  Projects found:          $($Ctx.TotalProjects)" -ForegroundColor White
+            Write-Host "  Projects with artifacts: $($Ctx.TotalCleaned)" -ForegroundColor White
+            Write-Host "  Projects skipped:        $($Ctx.TotalSkipped)" -ForegroundColor White
+            $sizeColor = if ($Ctx.TotalSizeBytes -ge 1GB) { "Red" } elseif ($Ctx.TotalSizeBytes -ge 100MB) { "Yellow" } else { "Green" }
+            Write-Host "  Total artifact size:     $([CleanerContext]::FormatSize($Ctx.TotalSizeBytes))" -ForegroundColor $sizeColor
+        }
     }
 }

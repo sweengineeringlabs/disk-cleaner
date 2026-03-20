@@ -22,6 +22,9 @@
 # Search fields:
 #   source_extensions File extensions to search for text content (e.g. .rs, .js, .py)
 #   search_exclude    Directories to skip during text search (defaults to targets/clean_dir)
+#
+# Benchmark fields:
+#   build_command     Command to benchmark build time (e.g. "cargo build", "npm run build")
 
 [settings]
 default_path = ""
@@ -36,6 +39,7 @@ clean_dir = "target"
 output_pattern = 'Removed (\d+) files'
 source_extensions = [".rs", ".toml"]
 search_exclude = ["target"]
+build_command = "cargo build"
 
 [profiles.node]
 name = "Node.js"
@@ -46,6 +50,7 @@ targets = ["node_modules"]
 optional_targets = [".next", ".nuxt", "dist"]
 source_extensions = [".js", ".ts", ".jsx", ".tsx", ".mjs", ".cjs", ".json"]
 search_exclude = ["node_modules", ".next", ".nuxt", "dist"]
+build_command = "npm run build"
 
 [profiles.java-maven]
 name = "Java (Maven)"
@@ -57,6 +62,7 @@ wrapper_windows = ".\\mvnw.cmd"
 clean_dir = "target"
 source_extensions = [".java", ".xml", ".properties"]
 search_exclude = ["target"]
+build_command = "mvn compile"
 
 [profiles.java-gradle]
 name = "Java (Gradle)"
@@ -69,6 +75,7 @@ wrapper_windows = ".\\gradlew.bat"
 clean_dir = "build"
 source_extensions = [".java", ".kt", ".kts", ".gradle", ".properties"]
 search_exclude = ["build"]
+build_command = "gradle build"
 
 [profiles.python]
 name = "Python"
@@ -79,3 +86,4 @@ targets = [".venv", "venv", ".mypy_cache", ".pytest_cache", ".ruff_cache", "dist
 recursive_targets = ["__pycache__"]
 source_extensions = [".py", ".pyi", ".toml", ".cfg"]
 search_exclude = [".venv", "venv", "__pycache__", ".mypy_cache", "dist", "build"]
+build_command = "python -m py_compile"

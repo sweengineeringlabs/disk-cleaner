@@ -15,6 +15,7 @@ class CleanProfile {
     [string[]] $RecursiveTargets
     [string[]] $SourceExtensions
     [string[]] $SearchExclude
+    [string]   $BuildCommand
 
     CleanProfile([string]$key, [TomlConfig]$config) {
         $this.Key            = $key
@@ -36,6 +37,7 @@ class CleanProfile {
         $this.RecursiveTargets = $config.GetArray("profiles.$key.recursive_targets")
         $this.SourceExtensions = $config.GetArray("profiles.$key.source_extensions")
         $this.SearchExclude    = $config.GetArray("profiles.$key.search_exclude")
+        $this.BuildCommand     = $config.GetValue("profiles.$key.build_command")
     }
 
     [string[]] AllMarkers() {

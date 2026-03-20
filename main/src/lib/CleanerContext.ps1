@@ -8,6 +8,7 @@ class CleanerContext {
     [bool]         $DryRun
     [bool]         $Parallel
     [bool]         $Cancelled
+    [bool]         $Benchmark
     [string]       $TextPattern
     [Spinner]      $Spinner
     [OutputWriter] $Writer
@@ -20,7 +21,7 @@ class CleanerContext {
 
     CleanerContext([string]$searchPath, [string[]]$exclude, [string[]]$include,
                    [bool]$all, [bool]$dryRun, [bool]$parallel, [bool]$jsonOutput,
-                   [string]$textPattern) {
+                   [string]$textPattern, [bool]$benchmark) {
         $this.SearchPath      = $searchPath
         $this.ExcludePatterns = $exclude
         $this.IncludePatterns = $include
@@ -28,6 +29,7 @@ class CleanerContext {
         $this.DryRun          = $dryRun
         $this.Parallel        = $parallel
         $this.Cancelled       = $false
+        $this.Benchmark       = $benchmark
         $this.TextPattern     = $textPattern
         $this.Spinner         = [Spinner]::new($jsonOutput)
         $this.Writer          = [OutputWriter]::new($jsonOutput)

@@ -99,6 +99,9 @@ param(
     [string]$Text,
 
     [Parameter()]
+    [switch]$Benchmark,
+
+    [Parameter()]
     [switch]$History,
 
     [Parameter()]
@@ -280,7 +283,7 @@ if (-not $Path) {
 
 # ─── Create Context ─────────────────────────────────────────────────────────────
 
-$script:ctx = [CleanerContext]::new($Path, $Exclude, $Include, [bool]$All, [bool]$DryRun, [bool]$Parallel, [bool]$JsonOutput, $Text)
+$script:ctx = [CleanerContext]::new($Path, $Exclude, $Include, [bool]$All, [bool]$DryRun, [bool]$Parallel, [bool]$JsonOutput, $Text, [bool]$Benchmark)
 
 # ─── Cancel Support ──────────────────────────────────────────────────────────────
 
