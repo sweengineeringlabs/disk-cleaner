@@ -128,6 +128,7 @@ if ($PSScriptRoot) {
 
 . (Join-Path $ScriptDir "main\features\clean\clean.ps1")
 . (Join-Path $ScriptDir "main\features\search\search.ps1")
+. (Join-Path $ScriptDir "main\features\analyze\analyze.ps1")
 
 # ─── Help ────────────────────────────────────────────────────────────────────────
 
@@ -141,6 +142,7 @@ USAGE:
 COMMANDS:
     clean             Remove build artifacts from detected projects (default)
     search            Find and report projects without modifying them
+    analyze           Report disk space consumption by build artifacts
     list-profiles     Show available language profiles
     help              Show this help message
 
@@ -165,6 +167,7 @@ EXAMPLES:
     disk-cleaner.ps1 clean -Lang rust, node -DryRun
     disk-cleaner.ps1 search -Lang all -Path "C:\projects"
     disk-cleaner.ps1 search -Lang rust -JsonOutput
+    disk-cleaner.ps1 analyze -Lang rust -Path "C:\projects" # space report
     disk-cleaner.ps1 -Lang rust                           # clean is default
     disk-cleaner.ps1 list-profiles
 
@@ -183,9 +186,9 @@ if ($ListProfiles) {
 }
 
 # Default command is "clean" for backward compatibility
-if (-not $Command -or $Command -notin @("clean", "search", "list-profiles", "help")) {
+if (-not $Command -or $Command -notin @("clean", "search", "analyze", "list-profiles", "help")) {
     # If Command looks like a profile name (not a known command), treat as Lang for backward compat
-    if ($Command -and $Command -notin @("clean", "search", "list-profiles", "help")) {
+    if ($Command -and $Command -notin @("clean", "search", "analyze", "list-profiles", "help")) {
         $Lang = @($Command) + $Lang
     }
     $Command = "clean"
@@ -288,6 +291,9 @@ switch ($Command) {
     }
     "search" {
         Invoke-Search -Ctx $script:ctx -ProfileKeys $resolvedProfiles -Toml $toml
+    }
+    "analyze" {
+        Invoke-Analyze -Ctx $script:ctx -ProfileKeys $resolvedProfiles -Toml $toml
     }
 }
 
