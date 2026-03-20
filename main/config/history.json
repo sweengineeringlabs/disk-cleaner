@@ -18,12 +18,165 @@
         "profiles":  "node"
     },
     {
-        "profiles":  "node",
-        "projects":  1,
-        "timestamp":  "2026-03-20T14:36:23.1201072+02:00",
-        "command":  "analyze",
         "size_bytes":  2048,
         "path":  "C:\\Users\\elvis\\AppData\\Local\\Temp\\disk-cleaner-test-324bbbb5",
-        "size_formatted":  "2 KiB"
+        "size_formatted":  "2 KiB",
+        "projects":  1,
+        "command":  "analyze",
+        "timestamp":  "2026-03-20T14:36:23.1201072+02:00",
+        "profiles":  "node"
+    },
+    {
+        "size_bytes":  0,
+        "path":  "C:/phd-systems/swe-labs/justscript",
+        "size_formatted":  "0 B",
+        "projects":  0,
+        "command":  "analyze",
+        "timestamp":  "2026-03-20T14:53:37.2915475+02:00",
+        "profiles":  "rust"
+    },
+    {
+        "size_bytes":  8192,
+        "path":  "C:\\Users\\elvis\\AppData\\Local\\Temp\\disk-cleaner-test-59534e07",
+        "size_formatted":  "8 KiB",
+        "projects":  1,
+        "command":  "analyze",
+        "timestamp":  "2026-03-20T14:53:51.1808780+02:00",
+        "profiles":  "node"
+    },
+    {
+        "size_bytes":  8192,
+        "path":  "C:\\Users\\elvis\\AppData\\Local\\Temp\\disk-cleaner-test-124d0e83",
+        "size_formatted":  "8 KiB",
+        "projects":  1,
+        "command":  "analyze",
+        "timestamp":  "2026-03-20T14:53:52.7754417+02:00",
+        "profiles":  "node"
+    },
+    {
+        "size_bytes":  8192,
+        "path":  "C:\\Users\\elvis\\AppData\\Local\\Temp\\disk-cleaner-test-4a1b7ef9",
+        "size_formatted":  "8 KiB",
+        "projects":  1,
+        "command":  "analyze",
+        "timestamp":  "2026-03-20T14:53:54.1214581+02:00",
+        "profiles":  "node"
+    },
+    {
+        "size_bytes":  8192,
+        "path":  "C:\\Users\\elvis\\AppData\\Local\\Temp\\disk-cleaner-test-aba85164",
+        "size_formatted":  "8 KiB",
+        "projects":  1,
+        "command":  "analyze",
+        "timestamp":  "2026-03-20T14:53:55.4118896+02:00",
+        "profiles":  "node"
+    },
+    {
+        "size_bytes":  8192,
+        "path":  "C:\\Users\\elvis\\AppData\\Local\\Temp\\disk-cleaner-test-9bd07d3d",
+        "size_formatted":  "8 KiB",
+        "projects":  1,
+        "command":  "analyze",
+        "timestamp":  "2026-03-20T14:53:56.8899176+02:00",
+        "profiles":  "node"
+    },
+    {
+        "size_bytes":  0,
+        "path":  "C:\\Users\\elvis\\AppData\\Local\\Temp\\disk-cleaner-test-d2fe40c8",
+        "size_formatted":  "0 B",
+        "projects":  0,
+        "command":  "analyze",
+        "timestamp":  "2026-03-20T14:53:58.1592035+02:00",
+        "profiles":  "node"
+    },
+    {
+        "size_bytes":  17408,
+        "path":  "C:\\Users\\elvis\\AppData\\Local\\Temp\\disk-cleaner-test-89eaa90c",
+        "size_formatted":  "17 KiB",
+        "projects":  2,
+        "command":  "analyze",
+        "timestamp":  "2026-03-20T14:53:59.7559154+02:00",
+        "profiles":  "node"
+    },
+    {
+        "size_bytes":  17408,
+        "path":  "C:\\Users\\elvis\\AppData\\Local\\Temp\\disk-cleaner-test-1927b98f",
+        "size_formatted":  "17 KiB",
+        "projects":  2,
+        "command":  "analyze",
+        "timestamp":  "2026-03-20T14:54:01.2157185+02:00",
+        "profiles":  "node"
+    },
+    {
+        "size_bytes":  1024,
+        "path":  "C:\\Users\\elvis\\AppData\\Local\\Temp\\disk-cleaner-test-28eed1bb",
+        "size_formatted":  "1 KiB",
+        "projects":  2,
+        "command":  "analyze",
+        "timestamp":  "2026-03-20T14:54:02.6390968+02:00",
+        "profiles":  "node"
+    },
+    {
+        "size_bytes":  512,
+        "path":  "C:\\Users\\elvis\\AppData\\Local\\Temp\\disk-cleaner-test-44b80e21",
+        "size_formatted":  "512 B",
+        "projects":  1,
+        "command":  "analyze",
+        "timestamp":  "2026-03-20T14:54:04.4055847+02:00",
+        "profiles":  "node"
+    },
+    {
+        "size_bytes":  4096,
+        "path":  "C:\\Users\\elvis\\AppData\\Local\\Temp\\disk-cleaner-test-277623eb",
+        "size_formatted":  "4 KiB",
+        "projects":  1,
+        "command":  "analyze",
+        "timestamp":  "2026-03-20T14:54:06.6889924+02:00",
+        "profiles":  "node"
+    },
+    {
+        "size_bytes":  4096,
+        "path":  "C:\\Users\\elvis\\AppData\\Local\\Temp\\disk-cleaner-test-9a058f63",
+        "size_formatted":  "4 KiB",
+        "projects":  1,
+        "command":  "analyze",
+        "timestamp":  "2026-03-20T14:54:08.1959483+02:00",
+        "profiles":  "node"
+    },
+    {
+        "size_bytes":  4096,
+        "path":  "C:\\Users\\elvis\\AppData\\Local\\Temp\\disk-cleaner-test-4a118b5e",
+        "size_formatted":  "4 KiB",
+        "projects":  1,
+        "command":  "analyze",
+        "timestamp":  "2026-03-20T14:54:09.4022731+02:00",
+        "profiles":  "node"
+    },
+    {
+        "size_bytes":  4096,
+        "path":  "C:\\Users\\elvis\\AppData\\Local\\Temp\\disk-cleaner-test-20a96779",
+        "size_formatted":  "4 KiB",
+        "projects":  1,
+        "command":  "analyze",
+        "timestamp":  "2026-03-20T14:54:10.6734626+02:00",
+        "profiles":  "node"
+    },
+    {
+        "size_bytes":  6144,
+        "path":  "C:\\Users\\elvis\\AppData\\Local\\Temp\\disk-cleaner-test-d100aad5",
+        "size_formatted":  "6 KiB",
+        "projects":  1,
+        "command":  "analyze",
+        "timestamp":  "2026-03-20T14:54:12.2617762+02:00",
+        "profiles":  "rust"
+    },
+    {
+        "profiles":  "rust",
+        "projects":  1,
+        "timestamp":  "2026-03-20T14:54:13.5021279+02:00",
+        "command":  "analyze",
+        "size_bytes":  6144,
+        "path":  "C:\\Users\\elvis\\AppData\\Local\\Temp\\disk-cleaner-test-4be0e78b",
+        "size_formatted":  "6 KiB"
     }
 ]
