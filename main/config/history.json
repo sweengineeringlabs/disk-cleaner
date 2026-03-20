@@ -1,0 +1,29 @@
+[
+    {
+        "size_bytes":  26688951,
+        "path":  "C:/phd-systems/swe-labs/justscript",
+        "size_formatted":  "25.45 MiB",
+        "projects":  1,
+        "command":  "analyze",
+        "timestamp":  "2026-03-20T14:32:30.3578460+02:00",
+        "profiles":  "node"
+    },
+    {
+        "size_bytes":  2048,
+        "path":  "C:\\Users\\elvis\\AppData\\Local\\Temp\\disk-cleaner-test-188dc45e",
+        "size_formatted":  "2 KiB",
+        "projects":  1,
+        "command":  "clean",
+        "timestamp":  "2026-03-20T14:36:08.5676590+02:00",
+        "profiles":  "node"
+    },
+    {
+        "profiles":  "node",
+        "projects":  1,
+        "timestamp":  "2026-03-20T14:36:23.1201072+02:00",
+        "command":  "analyze",
+        "size_bytes":  2048,
+        "path":  "C:\\Users\\elvis\\AppData\\Local\\Temp\\disk-cleaner-test-324bbbb5",
+        "size_formatted":  "2 KiB"
+    }
+]

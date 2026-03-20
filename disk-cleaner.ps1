@@ -99,6 +99,9 @@ param(
     [string]$Text,
 
     [Parameter()]
+    [switch]$History,
+
+    [Parameter()]
     [Alias("h")]
     [switch]$Help
 )
@@ -129,6 +132,7 @@ if ($PSScriptRoot) {
 . (Join-Path $ScriptDir "main\features\clean\clean.ps1")
 . (Join-Path $ScriptDir "main\features\search\search.ps1")
 . (Join-Path $ScriptDir "main\features\analyze\analyze.ps1")
+. (Join-Path $ScriptDir "main\features\monitor\monitor.ps1")
 
 # ─── Help ────────────────────────────────────────────────────────────────────────
 
@@ -143,6 +147,7 @@ COMMANDS:
     clean             Remove build artifacts from detected projects (default)
     search            Find and report projects without modifying them
     analyze           Report disk space consumption by build artifacts
+    monitor           Show build process resources and run history
     list-profiles     Show available language profiles
     help              Show this help message
 
@@ -160,6 +165,9 @@ OPTIONS (clean only):
     -DryRun               Show what would be cleaned without cleaning
     -Parallel             Run clean operations in parallel
 
+OPTIONS (monitor only):
+    -History              Show run history (past cleans/analyses)
+
 Press Ctrl+C at any time to cancel instantly. A partial summary is printed on exit.
 
 EXAMPLES:
@@ -168,6 +176,8 @@ EXAMPLES:
     disk-cleaner.ps1 search -Lang all -Path "C:\projects"
     disk-cleaner.ps1 search -Lang rust -JsonOutput
     disk-cleaner.ps1 analyze -Lang rust -Path "C:\projects" # space report
+    disk-cleaner.ps1 monitor                              # process resources + history
+    disk-cleaner.ps1 monitor -History                     # history only
     disk-cleaner.ps1 -Lang rust                           # clean is default
     disk-cleaner.ps1 list-profiles
 
@@ -186,9 +196,9 @@ if ($ListProfiles) {
 }
 
 # Default command is "clean" for backward compatibility
-if (-not $Command -or $Command -notin @("clean", "search", "analyze", "list-profiles", "help")) {
+if (-not $Command -or $Command -notin @("clean", "search", "analyze", "monitor", "list-profiles", "help")) {
     # If Command looks like a profile name (not a known command), treat as Lang for backward compat
-    if ($Command -and $Command -notin @("clean", "search", "analyze", "list-profiles", "help")) {
+    if ($Command -and $Command -notin @("clean", "search", "analyze", "monitor", "list-profiles", "help")) {
         $Lang = @($Command) + $Lang
     }
     $Command = "clean"
@@ -228,31 +238,33 @@ if ($Command -eq "list-profiles") {
     exit 0
 }
 
-# ─── Resolve Profiles ───────────────────────────────────────────────────────────
-
-if ($Lang.Count -eq 0) {
-    $Lang = $toml.GetArray("settings.default_profiles")
-}
+# ─── Resolve Profiles (skip for monitor) ─────────────────────────────────────
 
 $resolvedProfiles = @()
-foreach ($lp in $Lang) {
-    if ($lp -eq "all") {
-        $resolvedProfiles = $toml.Profiles
-        break
-    } else {
-        $pName = $toml.GetValue("profiles.$lp.name")
-        if ([string]::IsNullOrEmpty($pName)) {
-            Write-Host "Unknown profile: $lp" -ForegroundColor Red
-            Write-Host "Use list-profiles or -ListProfiles to see available profiles"
-            exit 1
-        }
-        $resolvedProfiles += $lp
+if ($Command -ne "monitor") {
+    if ($Lang.Count -eq 0) {
+        $Lang = $toml.GetArray("settings.default_profiles")
     }
-}
 
-if ($resolvedProfiles.Count -eq 0) {
-    Write-Host "No profiles selected. Use -Lang or set default_profiles in config." -ForegroundColor Red
-    exit 1
+    foreach ($lp in $Lang) {
+        if ($lp -eq "all") {
+            $resolvedProfiles = $toml.Profiles
+            break
+        } else {
+            $pName = $toml.GetValue("profiles.$lp.name")
+            if ([string]::IsNullOrEmpty($pName)) {
+                Write-Host "Unknown profile: $lp" -ForegroundColor Red
+                Write-Host "Use list-profiles or -ListProfiles to see available profiles"
+                exit 1
+            }
+            $resolvedProfiles += $lp
+        }
+    }
+
+    if ($resolvedProfiles.Count -eq 0) {
+        Write-Host "No profiles selected. Use -Lang or set default_profiles in config." -ForegroundColor Red
+        exit 1
+    }
 }
 
 # ─── Resolve Search Path ────────────────────────────────────────────────────────
@@ -285,15 +297,34 @@ Register-EngineEvent -SourceIdentifier PowerShell.Exiting -Action {
 
 # ─── Dispatch Command ───────────────────────────────────────────────────────────
 
+$configDir = Join-Path $ScriptDir "main\config"
+
 switch ($Command) {
     "clean" {
         Invoke-Clean -Ctx $script:ctx -ProfileKeys $resolvedProfiles -Toml $toml
+        if (-not $script:ctx.Cancelled -and -not $DryRun) {
+            Save-RunHistory -ConfigDir $configDir -Command "clean" `
+                -Profiles ($resolvedProfiles -join ", ") `
+                -Projects $script:ctx.TotalCleaned `
+                -SizeBytes $script:ctx.TotalSizeBytes `
+                -Path $Path
+        }
     }
     "search" {
         Invoke-Search -Ctx $script:ctx -ProfileKeys $resolvedProfiles -Toml $toml
     }
     "analyze" {
         Invoke-Analyze -Ctx $script:ctx -ProfileKeys $resolvedProfiles -Toml $toml
+        if (-not $script:ctx.Cancelled) {
+            Save-RunHistory -ConfigDir $configDir -Command "analyze" `
+                -Profiles ($resolvedProfiles -join ", ") `
+                -Projects $script:ctx.TotalCleaned `
+                -SizeBytes $script:ctx.TotalSizeBytes `
+                -Path $Path
+        }
+    }
+    "monitor" {
+        Invoke-Monitor -Ctx $script:ctx -ConfigDir $configDir -ShowHistory ([bool]$History)
     }
 }
 
