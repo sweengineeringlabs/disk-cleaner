@@ -142,6 +142,7 @@ if ($PSScriptRoot) {
 . (Join-Path $ScriptDir "main\features\search\search.ps1")
 . (Join-Path $ScriptDir "main\features\analyze\analyze.ps1")
 . (Join-Path $ScriptDir "main\features\monitor\monitor.ps1")
+. (Join-Path $ScriptDir "main\features\compact-wsl\compact-wsl.ps1")
 
 # ─── Help ────────────────────────────────────────────────────────────────────────
 
@@ -156,7 +157,9 @@ COMMANDS:
     clean             Remove build artifacts from detected projects (default)
     search            Find and report projects without modifying them
     analyze           Report disk space consumption by build artifacts
+                      Use -DiskUsage to scan any path with remediation hints
     monitor           Show build process resources and run history
+    compact-wsl       Compact WSL virtual disks to reclaim space (Admin required)
     list-profiles     Show available language profiles
     help              Show this help message
 
@@ -177,6 +180,8 @@ OPTIONS (clean only):
 OPTIONS (analyze only):
     -Benchmark            Benchmark build times instead of disk space
     -DiskUsage            Generic disk usage scan (no profile required)
+                          Shows drive capacity, system/hidden files, and
+                          remediation hints (cleanup commands for known hogs)
     -Depth <n>            Directory depth for -DiskUsage (default: 2)
 
 OPTIONS (monitor only):
@@ -194,6 +199,8 @@ EXAMPLES:
     disk-cleaner.ps1 analyze -DiskUsage -Path /tmp -Depth 3 # deeper scan
     disk-cleaner.ps1 monitor                              # process resources + history
     disk-cleaner.ps1 monitor -History                     # history only
+    disk-cleaner.ps1 compact-wsl -DryRun                  # preview WSL compaction
+    disk-cleaner.ps1 compact-wsl                          # compact (Admin required)
     disk-cleaner.ps1 -Lang rust                           # clean is default
     disk-cleaner.ps1 list-profiles
 
@@ -212,9 +219,9 @@ if ($ListProfiles) {
 }
 
 # Default command is "clean" for backward compatibility
-if (-not $Command -or $Command -notin @("clean", "search", "analyze", "monitor", "list-profiles", "help")) {
+if (-not $Command -or $Command -notin @("clean", "search", "analyze", "monitor", "compact-wsl", "list-profiles", "help")) {
     # If Command looks like a profile name (not a known command), treat as Lang for backward compat
-    if ($Command -and $Command -notin @("clean", "search", "analyze", "monitor", "list-profiles", "help")) {
+    if ($Command -and $Command -notin @("clean", "search", "analyze", "monitor", "compact-wsl", "list-profiles", "help")) {
         $Lang = @($Command) + $Lang
     }
     $Command = "clean"
@@ -257,7 +264,7 @@ if ($Command -eq "list-profiles") {
 # ─── Resolve Profiles (skip for monitor) ─────────────────────────────────────
 
 $resolvedProfiles = @()
-if ($Command -ne "monitor" -and -not $DiskUsage) {
+if ($Command -ne "monitor" -and $Command -ne "compact-wsl" -and -not $DiskUsage) {
     if ($Lang.Count -eq 0) {
         $Lang = $toml.GetArray("settings.default_profiles")
     }
@@ -346,6 +353,9 @@ switch ($Command) {
     }
     "monitor" {
         Invoke-Monitor -Ctx $script:ctx -ConfigDir $configDir -ShowHistory ([bool]$History)
+    }
+    "compact-wsl" {
+        Invoke-CompactWSL -Ctx $script:ctx
     }
 }
 

@@ -518,8 +518,8 @@ class DiskUsageAnalyzer {
 
         # Collect top-level children
         $entries = [System.Collections.ArrayList]::new()
-        $childDirs = Get-ChildItem -Path $rootPath -Directory -ErrorAction SilentlyContinue
-        $childFiles = Get-ChildItem -Path $rootPath -File -ErrorAction SilentlyContinue
+        $childDirs = Get-ChildItem -Path $rootPath -Directory -Force -ErrorAction SilentlyContinue
+        $childFiles = Get-ChildItem -Path $rootPath -File -Force -ErrorAction SilentlyContinue
 
         $dirIndex = 0
         $dirCount = @($childDirs).Count
@@ -654,6 +654,32 @@ class DiskUsageAnalyzer {
                 })
             }
 
+            # WSL virtual disk introspection
+            $this.ProbeWSLDistros()
+
+            # Remediation hints
+            $remediations = $this.BuildRemediation($sorted, $systemEntries)
+            if ($remediations.Count -gt 0) {
+                $w.BlankLine()
+                $w.Text("--- Remediation ---", "Cyan")
+                foreach ($rem in $remediations) {
+                    $remColor = if ($rem.SizeBytes -ge 10GB) { "Red" } elseif ($rem.SizeBytes -ge 1GB) { "Yellow" } else { "White" }
+                    $w.TextNoNewline("  $($rem.Name)", $remColor)
+                    $pad = [math]::Max(1, 35 - $rem.Name.Length)
+                    $w.TextNoNewline((" " * $pad), "White")
+                    $w.TextNoNewline("$([CleanerContext]::FormatSize($rem.SizeBytes))", $remColor)
+                    $w.Text("  $($rem.Action)", "DarkGray")
+
+                    $w.Json(@{
+                        event      = "remediation"
+                        name       = $rem.Name
+                        path       = $rem.Path
+                        size_bytes = $rem.SizeBytes
+                        action     = $rem.Action
+                    })
+                }
+            }
+
             $w.BlankLine()
             $w.Text("Drive: $([CleanerContext]::FormatSize($driveUsed)) / $([CleanerContext]::FormatSize($driveTotal)) ($drivePct% used) - $([CleanerContext]::FormatSize($driveFree)) free", $driveColor)
         } elseif ($driveInfo -and $driveInfo.IsReady) {
@@ -663,6 +689,31 @@ class DiskUsageAnalyzer {
             $drivePct   = [math]::Round($driveUsed / $driveTotal * 100, 1)
             $pathPct    = if ($driveTotal -gt 0) { [math]::Round($rootSize / $driveTotal * 100, 1) } else { 0 }
             $driveColor = if ($drivePct -ge 90) { "Red" } elseif ($drivePct -ge 75) { "Yellow" } else { "Green" }
+
+            # Remediation for non-root paths
+            $remediations = $this.BuildRemediation($sorted, $null)
+            if ($remediations.Count -gt 0) {
+                $w.BlankLine()
+                $w.Text("--- Remediation ---", "Cyan")
+                foreach ($rem in $remediations) {
+                    $remColor = if ($rem.SizeBytes -ge 10GB) { "Red" } elseif ($rem.SizeBytes -ge 1GB) { "Yellow" } else { "White" }
+                    $w.TextNoNewline("  $($rem.Name)", $remColor)
+                    $pad = [math]::Max(1, 35 - $rem.Name.Length)
+                    $w.TextNoNewline((" " * $pad), "White")
+                    $w.TextNoNewline("$([CleanerContext]::FormatSize($rem.SizeBytes))", $remColor)
+                    $w.Text("  $($rem.Action)", "DarkGray")
+
+                    $w.Json(@{
+                        event      = "remediation"
+                        name       = $rem.Name
+                        path       = $rem.Path
+                        size_bytes = $rem.SizeBytes
+                        action     = $rem.Action
+                    })
+                }
+            }
+
+            $w.BlankLine()
             $w.Text("Drive: $([CleanerContext]::FormatSize($driveUsed)) / $([CleanerContext]::FormatSize($driveTotal)) ($drivePct% used) - $([CleanerContext]::FormatSize($driveFree)) free", $driveColor)
             $w.Text("Path is $pathPct% of drive", "DarkGray")
         }
@@ -688,7 +739,7 @@ class DiskUsageAnalyzer {
     hidden [void] CollectChildren([string]$parentPath, [System.Collections.ArrayList]$list, [int]$currentDepth) {
         if ($currentDepth -gt $this.Depth) { return }
 
-        $subDirs = Get-ChildItem -Path $parentPath -Directory -ErrorAction SilentlyContinue
+        $subDirs = Get-ChildItem -Path $parentPath -Directory -Force -ErrorAction SilentlyContinue
         foreach ($sub in $subDirs) {
             if ($this.Ctx.Cancelled) { return }
             $sz = [CleanerContext]::DirSizeBytes($sub.FullName)
@@ -835,6 +886,298 @@ class DiskUsageAnalyzer {
         }
 
         return $totalProbed
+    }
+
+    hidden [void] ProbeWSLDistros() {
+        $w = $this.Ctx.Writer
+
+        # Check if WSL is available
+        $wslCmd = Get-Command wsl -ErrorAction SilentlyContinue
+        if (-not $wslCmd) { return }
+
+        # Get distro list
+        $distroRaw = $null
+        try {
+            $distroRaw = wsl --list --quiet 2>$null
+        } catch { return }
+        if (-not $distroRaw) { return }
+
+        # Parse distro names (wsl --list outputs UTF-16, may have null bytes)
+        $distros = @($distroRaw | ForEach-Object { $_.Trim().Replace("`0", "") } | Where-Object { $_.Length -gt 0 })
+        if ($distros.Count -eq 0) { return }
+
+        $w.BlankLine()
+        $w.Text("--- WSL Virtual Disks ---", "Cyan")
+
+        # Find all vhdx files once upfront
+        $allVhdx = [System.Collections.ArrayList]::new()
+        $wslRoot = "$env:LOCALAPPDATA\wsl"
+        if (Test-Path $wslRoot) {
+            $vhdxFiles = Get-ChildItem -Path $wslRoot -Recurse -Filter "ext4.vhdx" -Force -Depth 3 -ErrorAction SilentlyContinue
+            foreach ($vf in $vhdxFiles) {
+                if ($vf.Length -gt 0) {
+                    [void]$allVhdx.Add($vf)
+                }
+            }
+        }
+        $seenVhdx = @{}
+
+        # WSL remediation rules: path pattern inside Linux -> action
+        $wslRules = @(
+            @{ Pattern = "^/var/lib/docker";   Action = "docker system prune -a" }
+            @{ Pattern = "^/var/cache/apt";    Action = "sudo apt clean" }
+            @{ Pattern = "^/var/log";          Action = "sudo journalctl --vacuum-size=100M" }
+            @{ Pattern = "^/snap";             Action = "snap list --all; sudo snap remove --purge <old>" }
+            @{ Pattern = "^/tmp";              Action = "rm -rf /tmp/*" }
+            @{ Pattern = "^/home/.*/\.cache";  Action = "rm -rf ~/.cache/*" }
+            @{ Pattern = "^/home/.*/\.local";  Action = "Review ~/.local/share for stale data" }
+            @{ Pattern = "^/usr";              Action = "sudo apt autoremove" }
+        )
+
+        foreach ($distro in $distros) {
+            if ($this.Ctx.Cancelled) { break }
+
+            # Match distro to a vhdx file (assign unmatched vhdx by order)
+            $vhdxSize = [long]0
+            $vhdxPath = ""
+            foreach ($vf in $allVhdx) {
+                if (-not $seenVhdx.ContainsKey($vf.FullName)) {
+                    $vhdxSize = $vf.Length
+                    $vhdxPath = $vf.FullName
+                    $seenVhdx[$vf.FullName] = $distro
+                    break
+                }
+            }
+
+            $vhdxSizeStr = if ($vhdxSize -gt 0) { [CleanerContext]::FormatSize($vhdxSize) } else { "unknown" }
+            $vhdxColor = if ($vhdxSize -ge 50GB) { "Red" } elseif ($vhdxSize -ge 10GB) { "Yellow" } else { "White" }
+            $w.BlankLine()
+            $w.Text("  $distro (vhdx: $vhdxSizeStr)", $vhdxColor)
+            if ($vhdxPath) {
+                $w.Text("  $vhdxPath", "DarkGray")
+            }
+
+            # Shell into WSL and run du (with 60s timeout)
+            $duOutput = $null
+            try {
+                $w.Text("  Scanning inside $distro...", "DarkGray")
+                $job = Start-Job -ScriptBlock {
+                    param($d)
+                    wsl -d $d -- bash -c "du -h --max-depth=2 / 2>/dev/null | sort -rh | head -20"
+                } -ArgumentList $distro
+                $completed = $job | Wait-Job -Timeout 60
+                if ($completed) {
+                    $duOutput = Receive-Job $job
+                }
+                Remove-Job $job -Force -ErrorAction SilentlyContinue
+            } catch {}
+
+            if (-not $duOutput) {
+                $w.Text("  Could not scan (timed out or distro unavailable)", "DarkGray")
+                $w.Json(@{ event = "wsl_distro"; distro = $distro; vhdx_bytes = $vhdxSize; error = "scan_failed" })
+                continue
+            }
+
+            # Parse du output: "1.2G\t/var/lib/docker"
+            $wslEntries = [System.Collections.ArrayList]::new()
+            foreach ($line in $duOutput) {
+                $line = $line.Trim()
+                if ($line.Length -eq 0) { continue }
+                $parts = $line -split '\s+', 2
+                if ($parts.Count -lt 2) { continue }
+                $sizeStr = $parts[0]
+                $path = $parts[1]
+
+                # Parse human-readable size to bytes
+                $sizeBytes = [long]0
+                if ($sizeStr -match '^([\d.]+)([KMGTP]?)$') {
+                    $num = [double]$Matches[1]
+                    switch ($Matches[2]) {
+                        'K' { $sizeBytes = [long]($num * 1KB) }
+                        'M' { $sizeBytes = [long]($num * 1MB) }
+                        'G' { $sizeBytes = [long]($num * 1GB) }
+                        'T' { $sizeBytes = [long]($num * 1TB) }
+                        'P' { $sizeBytes = [long]($num * 1PB) }
+                        default { $sizeBytes = [long]$num }
+                    }
+                }
+
+                if ($path -eq "/" -or $sizeBytes -lt 1MB) { continue }
+
+                # Match remediation
+                $action = ""
+                foreach ($rule in $wslRules) {
+                    if ($path -match $rule.Pattern) {
+                        $action = $rule.Action
+                        break
+                    }
+                }
+
+                [void]$wslEntries.Add([PSCustomObject]@{
+                    Path      = $path
+                    SizeStr   = $sizeStr
+                    SizeBytes = $sizeBytes
+                    Action    = $action
+                })
+            }
+
+            # Display top entries
+            $shown = 0
+            foreach ($entry in $wslEntries) {
+                if ($shown -ge 15) { break }
+                $shown++
+                $entryColor = if ($entry.SizeBytes -ge 10GB) { "Red" } elseif ($entry.SizeBytes -ge 1GB) { "Yellow" } else { "DarkGray" }
+                $actionStr = if ($entry.Action) { "  $($entry.Action)" } else { "" }
+
+                $nameStr = $entry.Path
+                $w.TextNoNewline("    $nameStr", $entryColor)
+                $pad = [math]::Max(1, 38 - $nameStr.Length)
+                $w.TextNoNewline((" " * $pad), "White")
+                $w.Text("$($entry.SizeStr)$actionStr", $entryColor)
+
+                $w.Json(@{
+                    event      = "wsl_entry"
+                    distro     = $distro
+                    path       = $entry.Path
+                    size       = $entry.SizeStr
+                    size_bytes = $entry.SizeBytes
+                    action     = $entry.Action
+                })
+            }
+
+            # Compact hint
+            if ($vhdxSize -gt 0) {
+                $actualUsed = if ($wslEntries.Count -gt 0) { $wslEntries[0].SizeBytes } else { 0 }
+                if ($actualUsed -gt 0 -and $vhdxSize -gt ($actualUsed * 1.5)) {
+                    $reclaimable = $vhdxSize - $actualUsed
+                    $w.BlankLine()
+                    $w.Text("    Compactable: ~$([CleanerContext]::FormatSize($reclaimable)) reclaimable", "Green")
+                    $w.Text("    disk-cleaner.ps1 compact-wsl (or: wsl --shutdown && diskpart)", "DarkGray")
+                }
+            }
+
+            $w.Json(@{
+                event      = "wsl_distro"
+                distro     = $distro
+                vhdx_bytes = $vhdxSize
+                vhdx_path  = $vhdxPath
+                entries    = @($wslEntries | ForEach-Object { @{ path = $_.Path; size = $_.SizeStr; action = $_.Action } })
+            })
+        }
+    }
+
+    hidden [System.Collections.ArrayList] BuildRemediation([PSCustomObject[]]$entries, [System.Collections.ArrayList]$systemEntries) {
+        $hints = [System.Collections.ArrayList]::new()
+        $minSize = [long]500MB
+
+        # Known remediation rules: pattern on full path -> action text
+        $rules = @(
+            @{ Pattern = "\\AppData\\Local\\wsl";                Action = "disk-cleaner.ps1 compact-wsl" }
+            @{ Pattern = "\\AppData\\Local\\Docker";             Action = "docker system prune -a" }
+            @{ Pattern = "\\AppData\\Local\\Temp";               Action = "Safe to delete: Remove-Item $env:TEMP\* -Recurse -Force" }
+            @{ Pattern = "\\AppData\\Local\\npm-cache";          Action = "npm cache clean --force" }
+            @{ Pattern = "\\AppData\\Local\\Ollama";             Action = "ollama list; ollama rm <unused-models>" }
+            @{ Pattern = "\\AppData\\Local\\ms-playwright";      Action = "npx playwright install --dry-run (remove unused browsers)" }
+            @{ Pattern = "\\AppData\\Local\\NuGet";              Action = "dotnet nuget locals all --clear" }
+            @{ Pattern = "\\AppData\\Local\\pip\\Cache";         Action = "pip cache purge" }
+            @{ Pattern = "\\AppData\\Local\\yarn\\Cache";        Action = "yarn cache clean" }
+            @{ Pattern = "\\AppData\\Roaming\\npm-cache";        Action = "npm cache clean --force" }
+            @{ Pattern = "\\AppData\\Roaming\\Code";             Action = "VS Code: clear Extension cache + workspace storage" }
+            @{ Pattern = "\\.rustup";                            Action = "rustup toolchain list; rustup toolchain remove <old>" }
+            @{ Pattern = "\\.cargo\\registry";                   Action = "cargo cache --autoclean (install cargo-cache first)" }
+            @{ Pattern = "\\.cargo";                             Action = "cargo cache --autoclean (install cargo-cache first)" }
+            @{ Pattern = "\\.claude";                            Action = "Claude Code cache; safe to clear old conversations" }
+            @{ Pattern = "\\.gemini";                            Action = "Gemini cache; safe to clear" }
+            @{ Pattern = "\\.gradle\\caches";                    Action = "gradle --stop; rm -rf ~/.gradle/caches" }
+            @{ Pattern = "\\.gradle";                            Action = "gradle --stop; rm -rf ~/.gradle/caches" }
+            @{ Pattern = "\\.m2\\repository";                    Action = "mvn dependency:purge-local-repository" }
+            @{ Pattern = "\\.m2";                                Action = "mvn dependency:purge-local-repository" }
+            @{ Pattern = "\\.bun\\install";                      Action = "bun pm cache rm" }
+            @{ Pattern = "\\.bun";                               Action = "bun pm cache rm" }
+            @{ Pattern = "\\.cache";                             Action = "Review and clear stale caches" }
+            @{ Pattern = "\\.vscode\\extensions";                Action = "VS Code: uninstall unused extensions" }
+            @{ Pattern = "\\.vscode";                            Action = "VS Code: uninstall unused extensions" }
+            @{ Pattern = "\\.fastembed_cache";                   Action = "Safe to delete if not actively used" }
+            @{ Pattern = "\\.pnpm-store";                        Action = "pnpm store prune" }
+            @{ Pattern = "\\node_modules";                       Action = "disk-cleaner clean -Lang node" }
+            @{ Pattern = "\\target$";                            Action = "disk-cleaner clean -Lang rust (or cargo clean)" }
+            @{ Pattern = "\\`$Recycle\\.Bin";                    Action = "Empty Recycle Bin: Clear-RecycleBin -Force" }
+            @{ Pattern = "\\Windows\\Temp";                      Action = "Run Disk Cleanup (cleanmgr) as Admin" }
+            @{ Pattern = "\\Windows\\SoftwareDistribution";      Action = "Run Disk Cleanup (cleanmgr) as Admin" }
+            @{ Pattern = "\\SoftwareDistribution\\Download";     Action = "Stop wuauserv; delete Download folder contents" }
+            @{ Pattern = "\\temp$";                              Action = "Review and clean temporary files" }
+            @{ Pattern = "\\tmp$";                               Action = "Review and clean temporary files" }
+        )
+
+        # System file rules
+        $systemRules = @{
+            "pagefile.sys" = "Reduce: System > Advanced > Performance > Virtual Memory"
+            "hiberfil.sys" = "Disable hibernation: powercfg /h off (saves ~RAM size)"
+            "swapfile.sys" = "Managed by Windows (tied to pagefile settings)"
+        }
+
+        # Walk all scanned entries recursively to find matches (skip children of matched parents)
+        $matchedPaths = @{}
+        $this.MatchEntries($entries, $rules, $hints, $minSize, $this.Ctx.SearchPath, $matchedPaths)
+
+        # Match system files
+        if ($systemEntries) {
+            foreach ($sf in $systemEntries) {
+                if ($sf.SizeBytes -ge $minSize -and $systemRules.ContainsKey($sf.Name)) {
+                    [void]$hints.Add([PSCustomObject]@{
+                        Name      = $sf.Name
+                        Path      = $sf.Path
+                        SizeBytes = $sf.SizeBytes
+                        Action    = $systemRules[$sf.Name]
+                    })
+                }
+            }
+        }
+
+        # Sort by size descending
+        return [System.Collections.ArrayList]@($hints | Sort-Object -Property SizeBytes -Descending)
+    }
+
+    hidden [void] MatchEntries([PSCustomObject[]]$entries, [array]$rules, [System.Collections.ArrayList]$hints, [long]$minSize, [string]$rootPath, [hashtable]$matchedPaths) {
+        foreach ($entry in $entries) {
+            if ($entry.SizeBytes -lt $minSize) { continue }
+
+            $fullPath = $entry.Path
+            if (-not $fullPath -and $entry.Name -ne "(files)") {
+                $fullPath = Join-Path $rootPath $entry.Name
+            }
+            if (-not $fullPath) { continue }
+
+            # Skip if a parent path already matched
+            $parentMatched = $false
+            foreach ($mp in $matchedPaths.Keys) {
+                if ($fullPath.StartsWith($mp + "\") -or $fullPath.StartsWith($mp + "/")) {
+                    $parentMatched = $true
+                    break
+                }
+            }
+            if ($parentMatched) { continue }
+
+            $thisMatched = $false
+            foreach ($rule in $rules) {
+                if ($fullPath -match $rule.Pattern -and -not $matchedPaths.ContainsKey($fullPath)) {
+                    [void]$hints.Add([PSCustomObject]@{
+                        Name      = $entry.Name
+                        Path      = $fullPath
+                        SizeBytes = $entry.SizeBytes
+                        Action    = $rule.Action
+                    })
+                    $matchedPaths[$fullPath] = $true
+                    $thisMatched = $true
+                    break
+                }
+            }
+
+            # Only recurse into children if this entry did NOT match
+            if (-not $thisMatched -and $entry.Children -and $entry.Children.Count -gt 0) {
+                $this.MatchEntries(@($entry.Children), $rules, $hints, $minSize, $fullPath, $matchedPaths)
+            }
+        }
     }
 }
 

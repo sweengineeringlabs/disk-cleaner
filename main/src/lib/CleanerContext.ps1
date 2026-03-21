@@ -68,7 +68,7 @@ class CleanerContext {
     static [long] DirSizeBytes([string]$dirPath) {
         if (Test-Path $dirPath) {
             try {
-                $size = (Get-ChildItem -Path $dirPath -Recurse -File -ErrorAction SilentlyContinue |
+                $size = (Get-ChildItem -Path $dirPath -Recurse -File -Force -ErrorAction SilentlyContinue |
                          Measure-Object -Property Length -Sum).Sum
                 if ($null -eq $size) { return [long]0 }
                 return [long]$size
