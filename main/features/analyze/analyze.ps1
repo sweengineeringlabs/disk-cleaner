@@ -461,6 +461,393 @@ class BuildBenchmarker {
     }
 }
 
+# ─── Disk Usage Analyzer ─────────────────────────────────────────────────────────
+
+class DiskUsageAnalyzer {
+    [CleanerContext]  $Ctx
+    [int]             $Depth
+
+    DiskUsageAnalyzer([CleanerContext]$ctx, [int]$depth) {
+        $this.Ctx   = $ctx
+        $this.Depth = $depth
+    }
+
+    [void] Run() {
+        $w = $this.Ctx.Writer
+        $rootPath = $this.Ctx.SearchPath
+
+        # Resolve drive info
+        $driveInfo = $null
+        try {
+            $driveLetter = [System.IO.Path]::GetPathRoot($rootPath)
+            $driveInfo = [System.IO.DriveInfo]::new($driveLetter)
+        } catch {}
+
+        $startEvent = @{ event = "start"; command = "disk-usage"; path = $rootPath; depth = $this.Depth }
+        if ($driveInfo -and $driveInfo.IsReady) {
+            $startEvent["drive_total_bytes"] = $driveInfo.TotalSize
+            $startEvent["drive_free_bytes"]  = $driveInfo.AvailableFreeSpace
+            $startEvent["drive_used_bytes"]  = $driveInfo.TotalSize - $driveInfo.AvailableFreeSpace
+        }
+        $w.Json($startEvent)
+
+        $w.Text("disk-cleaner analyze -DiskUsage", "Cyan")
+        $w.Text("Path: $rootPath", "DarkGray")
+        $w.Text("Depth: $($this.Depth)", "DarkGray")
+
+        if ($driveInfo -and $driveInfo.IsReady) {
+            $driveTotal = $driveInfo.TotalSize
+            $driveFree  = $driveInfo.AvailableFreeSpace
+            $driveUsed  = $driveTotal - $driveFree
+            $drivePct   = [math]::Round($driveUsed / $driveTotal * 100, 1)
+            $driveColor = if ($drivePct -ge 90) { "Red" } elseif ($drivePct -ge 75) { "Yellow" } else { "Green" }
+            $w.Text("Drive: $([CleanerContext]::FormatSize($driveUsed)) used / $([CleanerContext]::FormatSize($driveTotal)) total ($drivePct%) - $([CleanerContext]::FormatSize($driveFree)) free", $driveColor)
+        }
+
+        if (-not (Test-Path $rootPath)) {
+            $w.Text("Path does not exist: $rootPath", "Red")
+            $w.Json(@{ event = "error"; message = "Path does not exist: $rootPath" })
+            return
+        }
+
+        $w.BlankLine()
+        $w.Text("Scanning...", "DarkGray")
+
+        $rootSize = [CleanerContext]::DirSizeBytes($rootPath)
+        $this.Ctx.TotalSizeBytes = $rootSize
+
+        # Collect top-level children
+        $entries = [System.Collections.ArrayList]::new()
+        $childDirs = Get-ChildItem -Path $rootPath -Directory -ErrorAction SilentlyContinue
+        $childFiles = Get-ChildItem -Path $rootPath -File -ErrorAction SilentlyContinue
+
+        $dirIndex = 0
+        $dirCount = @($childDirs).Count
+
+        foreach ($child in $childDirs) {
+            if ($this.Ctx.Cancelled) { break }
+            $dirIndex++
+            Write-Progress -Id 0 -Activity "disk-cleaner disk-usage" `
+                -Status "[$dirIndex/$dirCount] $($child.Name)" `
+                -PercentComplete ([math]::Min(100, [int]($dirIndex / [math]::Max(1, $dirCount) * 100)))
+
+            $childSize = [CleanerContext]::DirSizeBytes($child.FullName)
+            $childEntry = [PSCustomObject]@{
+                Name      = $child.Name
+                Path      = $child.FullName
+                SizeBytes = $childSize
+                IsDir     = $true
+                Children  = [System.Collections.ArrayList]::new()
+            }
+
+            # Drill deeper if requested
+            if ($this.Depth -gt 1 -and $childSize -gt 0) {
+                $this.CollectChildren($child.FullName, $childEntry.Children, 2)
+            }
+
+            [void]$entries.Add($childEntry)
+        }
+
+        # Sum loose files
+        $looseFileSize = [long]0
+        foreach ($f in $childFiles) {
+            $looseFileSize += $f.Length
+        }
+        if ($looseFileSize -gt 0) {
+            [void]$entries.Add([PSCustomObject]@{
+                Name      = "(files)"
+                Path      = $rootPath
+                SizeBytes = $looseFileSize
+                IsDir     = $false
+                Children  = [System.Collections.ArrayList]::new()
+            })
+        }
+
+        Write-Progress -Id 0 -Activity "disk-cleaner disk-usage" -Completed
+
+        # Sort descending by size
+        $sorted = @($entries | Sort-Object -Property SizeBytes -Descending)
+
+        # Report
+        $w.BlankLine()
+        $w.Text("--- Disk Usage: $rootPath ---", "Cyan")
+        $w.Text("Total: $([CleanerContext]::FormatSize($rootSize))", "White")
+        $w.BlankLine()
+
+        $rank = 0
+        foreach ($entry in $sorted) {
+            if ($entry.SizeBytes -eq 0) { continue }
+            $rank++
+            $this.ReportEntry($entry, $rootSize, $rank, "  ")
+
+            $w.Json(@{
+                event      = "disk_usage_entry"
+                name       = $entry.Name
+                path       = $entry.Path
+                size_bytes = $entry.SizeBytes
+                is_dir     = $entry.IsDir
+            })
+        }
+
+        # System files probe (only when scanning a drive root)
+        $systemFilesSize = [long]0
+        $systemEntries = [System.Collections.ArrayList]::new()
+        $isDriveRoot = ($rootPath -match '^[A-Za-z]:\\?$')
+
+        if ($isDriveRoot -and $driveInfo -and $driveInfo.IsReady) {
+            $driveRoot = $driveInfo.RootDirectory.FullName
+            $systemFilesSize = $this.ProbeSystemFiles($driveRoot, $systemEntries)
+        }
+
+        # Summary
+        $w.BlankLine()
+        $entryCount = @($sorted | Where-Object { $_.SizeBytes -gt 0 }).Count
+        $sizeColor = if ($rootSize -ge 1GB) { "Red" } elseif ($rootSize -ge 100MB) { "Yellow" } else { "Green" }
+        $w.Text("Total scanned: $([CleanerContext]::FormatSize($rootSize))  ($entryCount entries)", $sizeColor)
+
+        if ($isDriveRoot -and $driveInfo -and $driveInfo.IsReady) {
+            $driveTotal = $driveInfo.TotalSize
+            $driveFree  = $driveInfo.AvailableFreeSpace
+            $driveUsed  = $driveTotal - $driveFree
+            $drivePct   = [math]::Round($driveUsed / $driveTotal * 100, 1)
+            $accounted  = $rootSize + $systemFilesSize
+            $unaccounted = [math]::Max([long]0, [long]($driveUsed - $accounted))
+            $driveColor = if ($drivePct -ge 90) { "Red" } elseif ($drivePct -ge 75) { "Yellow" } else { "Green" }
+
+            if ($systemEntries.Count -gt 0) {
+                $w.BlankLine()
+                $w.Text("--- System / Hidden Files ---", "Cyan")
+                foreach ($sf in $systemEntries) {
+                    $sfColor = if ($sf.SizeBytes -ge 1GB) { "Yellow" } else { "DarkGray" }
+                    $sfStatus = if ($sf.Accessible) { "" } else { " (access denied)" }
+                    if ($sf.SizeBytes -gt 0) {
+                        $w.Text("  $($sf.Name): $([CleanerContext]::FormatSize($sf.SizeBytes))$sfStatus", $sfColor)
+                    } else {
+                        $w.Text("  $($sf.Name): $sfStatus", "DarkGray")
+                    }
+                    $w.Json(@{
+                        event      = "system_file"
+                        name       = $sf.Name
+                        path       = $sf.Path
+                        size_bytes = $sf.SizeBytes
+                        accessible = $sf.Accessible
+                    })
+                }
+                $w.Text("  System files total: $([CleanerContext]::FormatSize($systemFilesSize))", "White")
+            }
+
+            if ($unaccounted -gt 0) {
+                $w.BlankLine()
+                $w.Text("--- Unaccounted Space ---", "Cyan")
+                $w.Text("  $([CleanerContext]::FormatSize($unaccounted)) not visible to scan", "DarkGray")
+                $w.Text("  (restricted dirs, NTFS metadata, VSS snapshots, etc.)", "DarkGray")
+
+                $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+                if (-not $isAdmin) {
+                    $w.Text("  Run as Administrator for a more complete scan", "Yellow")
+                }
+
+                $w.Json(@{
+                    event            = "unaccounted_space"
+                    unaccounted_bytes = $unaccounted
+                    is_admin         = $isAdmin
+                })
+            }
+
+            $w.BlankLine()
+            $w.Text("Drive: $([CleanerContext]::FormatSize($driveUsed)) / $([CleanerContext]::FormatSize($driveTotal)) ($drivePct% used) - $([CleanerContext]::FormatSize($driveFree)) free", $driveColor)
+        } elseif ($driveInfo -and $driveInfo.IsReady) {
+            $driveTotal = $driveInfo.TotalSize
+            $driveFree  = $driveInfo.AvailableFreeSpace
+            $driveUsed  = $driveTotal - $driveFree
+            $drivePct   = [math]::Round($driveUsed / $driveTotal * 100, 1)
+            $pathPct    = if ($driveTotal -gt 0) { [math]::Round($rootSize / $driveTotal * 100, 1) } else { 0 }
+            $driveColor = if ($drivePct -ge 90) { "Red" } elseif ($drivePct -ge 75) { "Yellow" } else { "Green" }
+            $w.Text("Drive: $([CleanerContext]::FormatSize($driveUsed)) / $([CleanerContext]::FormatSize($driveTotal)) ($drivePct% used) - $([CleanerContext]::FormatSize($driveFree)) free", $driveColor)
+            $w.Text("Path is $pathPct% of drive", "DarkGray")
+        }
+
+        $summaryEvent = @{
+            event       = "summary"
+            command     = "disk-usage"
+            path        = $rootPath
+            total_bytes = $rootSize
+            entry_count = $sorted.Count
+        }
+        if ($driveInfo -and $driveInfo.IsReady) {
+            $summaryEvent["drive_total_bytes"] = $driveInfo.TotalSize
+            $summaryEvent["drive_free_bytes"]  = $driveInfo.AvailableFreeSpace
+            $summaryEvent["drive_used_bytes"]  = $driveInfo.TotalSize - $driveInfo.AvailableFreeSpace
+        }
+        if ($systemFilesSize -gt 0) {
+            $summaryEvent["system_files_bytes"] = $systemFilesSize
+        }
+        $w.Json($summaryEvent)
+    }
+
+    hidden [void] CollectChildren([string]$parentPath, [System.Collections.ArrayList]$list, [int]$currentDepth) {
+        if ($currentDepth -gt $this.Depth) { return }
+
+        $subDirs = Get-ChildItem -Path $parentPath -Directory -ErrorAction SilentlyContinue
+        foreach ($sub in $subDirs) {
+            if ($this.Ctx.Cancelled) { return }
+            $sz = [CleanerContext]::DirSizeBytes($sub.FullName)
+            if ($sz -gt 0) {
+                $childEntry = [PSCustomObject]@{
+                    Name      = $sub.Name
+                    Path      = $sub.FullName
+                    SizeBytes = $sz
+                    IsDir     = $true
+                    Children  = [System.Collections.ArrayList]::new()
+                }
+                if ($currentDepth -lt $this.Depth) {
+                    $this.CollectChildren($sub.FullName, $childEntry.Children, $currentDepth + 1)
+                }
+                [void]$list.Add($childEntry)
+            }
+        }
+    }
+
+    hidden [void] ReportEntry([PSCustomObject]$entry, [long]$parentSize, [int]$rank, [string]$indent) {
+        $w = $this.Ctx.Writer
+        if ($w.JsonMode) { return }
+
+        $pct = if ($parentSize -gt 0) { [math]::Round($entry.SizeBytes / $parentSize * 100, 1) } else { 0 }
+        $sizeColor = if ($entry.SizeBytes -ge 1GB) { "Red" } elseif ($entry.SizeBytes -ge 100MB) { "Yellow" } else { "White" }
+        $suffix = if ($entry.IsDir) { "/" } else { "" }
+
+        $nameStr = "$($entry.Name)$suffix"
+        $w.TextNoNewline("${indent}[$rank] ", "DarkGray")
+        $w.TextNoNewline($nameStr, "White")
+        $spaces = [math]::Max(1, 40 - $nameStr.Length)
+        $w.Text((" " * $spaces) + "$([CleanerContext]::FormatSize($entry.SizeBytes)) ($pct%)", $sizeColor)
+
+        # Show children sorted by size
+        $sortedChildren = @($entry.Children | Sort-Object -Property SizeBytes -Descending)
+        $childRank = 0
+        foreach ($child in $sortedChildren) {
+            if ($child.SizeBytes -eq 0) { continue }
+            $childRank++
+            $childPct = if ($entry.SizeBytes -gt 0) { [math]::Round($child.SizeBytes / $entry.SizeBytes * 100, 1) } else { 0 }
+            $childColor = if ($child.SizeBytes -ge 1GB) { "Red" } elseif ($child.SizeBytes -ge 100MB) { "Yellow" } else { "DarkGray" }
+            $childSuffix = if ($child.IsDir) { "/" } else { "" }
+            $w.Text("${indent}    $($child.Name)$childSuffix : $([CleanerContext]::FormatSize($child.SizeBytes)) ($childPct%)", $childColor)
+
+            # One more level
+            $grandChildren = @($child.Children | Sort-Object -Property SizeBytes -Descending)
+            foreach ($gc in $grandChildren) {
+                if ($gc.SizeBytes -eq 0) { continue }
+                $gcPct = if ($child.SizeBytes -gt 0) { [math]::Round($gc.SizeBytes / $child.SizeBytes * 100, 1) } else { 0 }
+                $w.Text("${indent}        $($gc.Name)/ : $([CleanerContext]::FormatSize($gc.SizeBytes)) ($gcPct%)", "DarkGray")
+            }
+        }
+    }
+
+    hidden [long] ProbeSystemFiles([string]$driveRoot, [System.Collections.ArrayList]$results) {
+        $totalProbed = [long]0
+
+        # Known large system files
+        $systemFiles = @(
+            @{ Name = "pagefile.sys";   Path = Join-Path $driveRoot "pagefile.sys" }
+            @{ Name = "hiberfil.sys";   Path = Join-Path $driveRoot "hiberfil.sys" }
+            @{ Name = "swapfile.sys";   Path = Join-Path $driveRoot "swapfile.sys" }
+        )
+
+        foreach ($sf in $systemFiles) {
+            $size = [long]0
+            $accessible = $false
+            try {
+                $fi = [System.IO.FileInfo]::new($sf.Path)
+                if ($fi.Exists) {
+                    $size = $fi.Length
+                    $accessible = $true
+                }
+            } catch {
+                # File exists but we can't read its size — try via WMI
+                try {
+                    $cimFile = Get-CimInstance -ClassName CIM_DataFile -Filter "Name='$($sf.Path.Replace('\','\\'))'" -ErrorAction SilentlyContinue
+                    if ($cimFile) {
+                        $size = [long]$cimFile.FileSize
+                        $accessible = $true
+                    }
+                } catch {}
+            }
+
+            if ($size -gt 0 -or (Test-Path $sf.Path -ErrorAction SilentlyContinue)) {
+                [void]$results.Add([PSCustomObject]@{
+                    Name       = $sf.Name
+                    Path       = $sf.Path
+                    SizeBytes  = $size
+                    Accessible = $accessible
+                })
+                $totalProbed += $size
+            }
+        }
+
+        # Known large system directories
+        $systemDirs = @(
+            @{ Name = "System Volume Information"; Path = Join-Path $driveRoot "System Volume Information" }
+            @{ Name = '$Recycle.Bin';              Path = Join-Path $driveRoot '$Recycle.Bin' }
+            @{ Name = "Recovery";                  Path = Join-Path $driveRoot "Recovery" }
+        )
+
+        foreach ($sd in $systemDirs) {
+            if (Test-Path $sd.Path -ErrorAction SilentlyContinue) {
+                $size = [long]0
+                $accessible = $false
+                try {
+                    $size = [CleanerContext]::DirSizeBytes($sd.Path)
+                    if ($size -gt 0) { $accessible = $true }
+                } catch {}
+
+                [void]$results.Add([PSCustomObject]@{
+                    Name       = $sd.Name + "/"
+                    Path       = $sd.Path
+                    SizeBytes  = $size
+                    Accessible = $accessible
+                })
+                $totalProbed += $size
+            }
+        }
+
+        # Check for WSL vhdx files
+        $wslPaths = @(
+            "$env:LOCALAPPDATA\Packages",
+            "$env:LOCALAPPDATA\Docker"
+        )
+        foreach ($wslRoot in $wslPaths) {
+            if (Test-Path $wslRoot -ErrorAction SilentlyContinue) {
+                try {
+                    $vhdxFiles = Get-ChildItem -Path $wslRoot -Recurse -Filter "*.vhdx" -ErrorAction SilentlyContinue
+                    foreach ($vhdx in $vhdxFiles) {
+                        if ($vhdx.Length -gt 100MB) {
+                            [void]$results.Add([PSCustomObject]@{
+                                Name       = "WSL/Docker: $($vhdx.Name)"
+                                Path       = $vhdx.FullName
+                                SizeBytes  = $vhdx.Length
+                                Accessible = $true
+                            })
+                            $totalProbed += $vhdx.Length
+                        }
+                    }
+                } catch {}
+            }
+        }
+
+        return $totalProbed
+    }
+}
+
+function Invoke-DiskUsage {
+    param(
+        [CleanerContext] $Ctx,
+        [int]            $Depth = 2
+    )
+
+    $analyzer = [DiskUsageAnalyzer]::new($Ctx, $Depth)
+    $analyzer.Run()
+}
+
 function Invoke-Analyze {
     param(
         [CleanerContext] $Ctx,

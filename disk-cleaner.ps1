@@ -102,6 +102,12 @@ param(
     [switch]$Benchmark,
 
     [Parameter()]
+    [switch]$DiskUsage,
+
+    [Parameter()]
+    [int]$Depth = 2,
+
+    [Parameter()]
     [switch]$History,
 
     [Parameter()]
@@ -168,6 +174,11 @@ OPTIONS (clean only):
     -DryRun               Show what would be cleaned without cleaning
     -Parallel             Run clean operations in parallel
 
+OPTIONS (analyze only):
+    -Benchmark            Benchmark build times instead of disk space
+    -DiskUsage            Generic disk usage scan (no profile required)
+    -Depth <n>            Directory depth for -DiskUsage (default: 2)
+
 OPTIONS (monitor only):
     -History              Show run history (past cleans/analyses)
 
@@ -179,6 +190,8 @@ EXAMPLES:
     disk-cleaner.ps1 search -Lang all -Path "C:\projects"
     disk-cleaner.ps1 search -Lang rust -JsonOutput
     disk-cleaner.ps1 analyze -Lang rust -Path "C:\projects" # space report
+    disk-cleaner.ps1 analyze -DiskUsage -Path "C:\data"    # generic disk usage
+    disk-cleaner.ps1 analyze -DiskUsage -Path /tmp -Depth 3 # deeper scan
     disk-cleaner.ps1 monitor                              # process resources + history
     disk-cleaner.ps1 monitor -History                     # history only
     disk-cleaner.ps1 -Lang rust                           # clean is default
@@ -244,7 +257,7 @@ if ($Command -eq "list-profiles") {
 # ─── Resolve Profiles (skip for monitor) ─────────────────────────────────────
 
 $resolvedProfiles = @()
-if ($Command -ne "monitor") {
+if ($Command -ne "monitor" -and -not $DiskUsage) {
     if ($Lang.Count -eq 0) {
         $Lang = $toml.GetArray("settings.default_profiles")
     }
@@ -317,10 +330,15 @@ switch ($Command) {
         Invoke-Search -Ctx $script:ctx -ProfileKeys $resolvedProfiles -Toml $toml
     }
     "analyze" {
-        Invoke-Analyze -Ctx $script:ctx -ProfileKeys $resolvedProfiles -Toml $toml
+        if ($DiskUsage) {
+            Invoke-DiskUsage -Ctx $script:ctx -Depth $Depth
+        } else {
+            Invoke-Analyze -Ctx $script:ctx -ProfileKeys $resolvedProfiles -Toml $toml
+        }
         if (-not $script:ctx.Cancelled) {
-            Save-RunHistory -ConfigDir $configDir -Command "analyze" `
-                -Profiles ($resolvedProfiles -join ", ") `
+            $historyCmd = if ($DiskUsage) { "disk-usage" } else { "analyze" }
+            Save-RunHistory -ConfigDir $configDir -Command $historyCmd `
+                -Profiles $(if ($DiskUsage) { "disk-usage" } else { $resolvedProfiles -join ", " }) `
                 -Projects $script:ctx.TotalCleaned `
                 -SizeBytes $script:ctx.TotalSizeBytes `
                 -Path $Path
