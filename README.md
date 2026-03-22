@@ -74,7 +74,7 @@ disk-cleaner.ps1 analyze -Lang rust -Benchmark
 disk-cleaner.ps1 monitor
 disk-cleaner.ps1 monitor -History
 
-# WSL
+# WSL compaction (requires elevated terminal)
 disk-cleaner.ps1 compact-wsl -DryRun
 disk-cleaner.ps1 compact-wsl
 
@@ -212,6 +212,40 @@ Use `-JsonOutput` (PowerShell) or `--json` (Bash) for structured output. Each li
 
 ```bash
 disk-cleaner clean --lang node --json | jq 'select(.event == "clean_complete")'
+```
+
+### WSL Compaction
+
+The `compact-wsl` command requires an **elevated (Administrator) PowerShell terminal**. The script checks for admin privileges and exits with an error if not elevated — it cannot self-elevate interactively.
+
+```powershell
+# From an elevated PowerShell terminal:
+disk-cleaner.ps1 compact-wsl -DryRun    # preview what would be compacted
+disk-cleaner.ps1 compact-wsl            # compact all WSL virtual disks
+```
+
+**Manual alternative** — if you prefer not to run the script as Administrator, or need to compact a specific VHDX file directly:
+
+```powershell
+# 1. Shut down WSL
+wsl --shutdown
+
+# 2. Open an elevated PowerShell (right-click > Run as Administrator)
+#    and run diskpart interactively:
+diskpart
+
+# 3. Inside diskpart, run these commands:
+#    select vdisk file="C:\Users\<you>\AppData\Local\wsl\<distro-id>\ext4.vhdx"
+#    attach vdisk readonly
+#    compact vdisk
+#    detach vdisk
+#    exit
+```
+
+To find your VHDX paths, use `-DryRun` (which does not require admin):
+
+```powershell
+disk-cleaner.ps1 compact-wsl -DryRun
 ```
 
 ## Project Structure

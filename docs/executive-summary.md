@@ -46,7 +46,7 @@ New languages can be added via the TOML configuration file without modifying any
 - **Build benchmarking** — measure and compare build times across projects
 - **Process monitoring** — real-time CPU and memory tracking of build processes
 - **Run history** — persistent log of past operations (last 100 entries)
-- **WSL compaction** — discover all WSL distros, locate VHDX files, and compact with dry-run preview
+- **WSL compaction** — discover all WSL distros, locate VHDX files, and compact with dry-run preview (requires elevated terminal; manual diskpart steps documented as alternative)
 
 ### Implementations
 
