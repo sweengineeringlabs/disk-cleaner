@@ -183,7 +183,8 @@ Add a section to `main/config/profiles.toml`:
 ```toml
 [profiles.dotnet]
 name = ".NET"
-marker = "*.csproj"
+marker = "global.json"
+alt_markers = ["Directory.Build.props"]
 type = "command"
 command = "dotnet clean"
 clean_dir = "bin"
@@ -293,8 +294,8 @@ disk-cleaner/
 
 | Language | Detection Marker(s) | Clean Strategy |
 |----------|-------------------|----------------|
-| Rust | `Cargo.lock` | `cargo clean` + remove `target/` |
+| Rust | `Cargo.lock` | `cargo clean` |
 | Node.js | `package-lock.json`, `yarn.lock`, `pnpm-lock.yaml`, `bun.lock` | Remove `node_modules`, `.next`, `.nuxt`, `dist` |
 | Java (Maven) | `pom.xml` | `mvn clean` (supports `mvnw` wrapper) |
 | Java (Gradle) | `build.gradle`, `build.gradle.kts` | `gradle clean` (supports `gradlew` wrapper) |
-| Python | `pyproject.toml`, `setup.py`, `requirements.txt` | Remove `.venv`, `__pycache__`, `.mypy_cache`, `.pytest_cache`, `.ruff_cache`, `dist`, `build` |
+| Python | `pyproject.toml`, `setup.py`, `requirements.txt` | Remove `.venv`, `venv`, `__pycache__`, `.mypy_cache`, `.pytest_cache`, `.ruff_cache`, `dist`, `build` |

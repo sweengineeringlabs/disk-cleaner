@@ -53,7 +53,7 @@ New languages can be added via the TOML configuration file without modifying any
 Two parallel implementations share a single TOML configuration:
 
 - **PowerShell** (`disk-cleaner.ps1`) — primary implementation for Windows, all commands
-- **Bash** (`bin/disk-cleaner`) — implementation for Linux/macOS, supports clean, search, and list-profiles
+- **Bash** (`bin/disk-cleaner`) — implementation for Linux/macOS, supports clean, search, list-profiles, and help
 
 ### Typical Impact
 
