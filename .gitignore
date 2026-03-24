@@ -1,2 +1,11 @@
 # Generated run history
-main/config/history.json
+powershell/main/config/history.json
+
+# Rust build artifacts
+rust/target/
+rust/Cargo.lock
+
+# Java build artifacts
+java/disk-cleaner
+java/disk-cleaner.exe
+java/*.pdb

@@ -1,0 +1,24 @@
+[package]
+name = "disk-cleaner-cli"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "CLI binary for disk-cleaner"
+keywords = ["disk", "cleaner", "build-artifacts", "cli"]
+categories = ["command-line-utilities"]
+
+[[bin]]
+name = "disk-cleaner"
+path = "src/main.rs"
+
+[dependencies]
+disk-cleaner-config = { path = "../main/features/config" }
+disk-cleaner-clean = { path = "../main/features/clean" }
+disk-cleaner-search = { path = "../main/features/search" }
+disk-cleaner-analyze = { path = "../main/features/analyze" }
+disk-cleaner-monitor = { path = "../main/features/monitor" }
+disk-cleaner-compact-wsl = { path = "../main/features/compact_wsl" }
+clap = { version = "4", features = ["derive"] }

@@ -1,0 +1,16 @@
+[package]
+name = "disk-cleaner-search"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Search feature: finds projects with optional text search"
+
+[dependencies]
+disk-cleaner-config = { path = "../config" }
+walkdir = "2"
+
+[dev-dependencies]
+tempfile = "3"

@@ -1,0 +1,15 @@
+[package]
+name = "disk-cleaner-compact-wsl"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Compact-WSL feature: WSL virtual disk compaction"
+
+[dependencies]
+disk-cleaner-config = { path = "../config" }
+
+[dev-dependencies]
+tempfile = "3"

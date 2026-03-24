@@ -1,0 +1,16 @@
+[package]
+name = "disk-cleaner-config"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Configuration, profile, and context types for disk-cleaner"
+
+[dependencies]
+walkdir = "2"
+thiserror = "2"
+
+[dev-dependencies]
+tempfile = "3"

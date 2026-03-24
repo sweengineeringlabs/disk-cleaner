@@ -1,0 +1,16 @@
+[package]
+name = "disk-cleaner-analyze"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Analyze feature: reports disk space consumption by build artifacts"
+
+[dependencies]
+disk-cleaner-config = { path = "../config" }
+walkdir = "2"
+
+[dev-dependencies]
+tempfile = "3"
