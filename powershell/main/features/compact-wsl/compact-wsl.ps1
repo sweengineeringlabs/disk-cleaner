@@ -99,9 +99,10 @@ class VhdxCompactor {
         if ($this.Ctx.DryRun) {
             $w.BlankLine()
             $w.Text("Would perform:", "Cyan")
-            $w.Text("  1. wsl --shutdown (terminates all running WSL processes)", "Yellow")
-            $w.Text("  2. diskpart compact on $($vhdxEntries.Count) vhdx file(s)", "Yellow")
-            $w.Text("  3. Report space reclaimed", "Yellow")
+            $w.Text("  1. fstrim -v / in each distro (zeroes freed blocks so host can reclaim them)", "Yellow")
+            $w.Text("  2. wsl --shutdown (terminates all running WSL processes)", "Yellow")
+            $w.Text("  3. diskpart compact on $($vhdxEntries.Count) vhdx file(s)", "Yellow")
+            $w.Text("  4. Report space reclaimed", "Yellow")
             $w.BlankLine()
             $w.Text("Run without -DryRun to execute (requires Administrator).", "DarkGray")
             $w.Json(@{ event = "compact_dry_run"; vhdx_count = $vhdxEntries.Count; total_bytes = $totalBefore })
@@ -119,6 +120,20 @@ class VhdxCompactor {
                 $w.Text("Cancelled.", "DarkGray")
                 $w.Json(@{ event = "compact_cancelled" })
                 return
+            }
+        }
+
+        # fstrim each distro so freed blocks are zeroed before compaction
+        # Without this, space freed by 'rm' inside WSL is never realized on the host
+        $w.BlankLine()
+        $w.Text("Trimming free space in WSL distros...", "Cyan")
+        foreach ($entry in $vhdxEntries) {
+            $w.Text("  fstrim $($entry.Distro)...", "DarkGray")
+            try {
+                wsl -d $entry.Distro -- fstrim -v / 2>$null
+                $w.Json(@{ event = "fstrim_complete"; distro = $entry.Distro })
+            } catch {
+                $w.Text("  fstrim failed (non-fatal): $_", "DarkGray")
             }
         }
 

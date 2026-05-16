@@ -83,12 +83,24 @@ impl WslCompactor for DefaultWslCompactor {
         if dry_run {
             println!();
             println!("Would perform:");
-            println!("  1. wsl --shutdown (terminates all running WSL processes)");
-            println!("  2. diskpart compact on {} vhdx file(s)", entries.len());
-            println!("  3. Report space reclaimed");
+            println!("  1. fstrim -v / in each distro (zeroes freed blocks so host can reclaim them)");
+            println!("  2. wsl --shutdown (terminates all running WSL processes)");
+            println!("  3. diskpart compact on {} vhdx file(s)", entries.len());
+            println!("  4. Report space reclaimed");
             println!();
             println!("Run without --dry-run to execute (requires Administrator).");
             return;
+        }
+
+        // fstrim each distro so freed blocks are zeroed before compaction
+        // Without this, space freed by 'rm' inside WSL is never realized on the host
+        println!();
+        println!("Trimming free space in WSL distros...");
+        for entry in &entries {
+            println!("  fstrim {}...", entry.distro);
+            let _ = Command::new("wsl")
+                .args(["-d", &entry.distro, "--", "fstrim", "-v", "/"])
+                .output();
         }
 
         // Shutdown WSL

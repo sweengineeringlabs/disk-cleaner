@@ -87,12 +87,26 @@ public class DefaultWslCompactor implements WslCompactor {
         if (dryRun) {
             System.out.println();
             System.out.println("Would perform:");
-            System.out.println("  1. wsl --shutdown (terminates all running WSL processes)");
-            System.out.println("  2. diskpart compact on " + entries.length + " vhdx file(s)");
-            System.out.println("  3. Report space reclaimed");
+            System.out.println("  1. fstrim -v / in each distro (zeroes freed blocks so host can reclaim them)");
+            System.out.println("  2. wsl --shutdown (terminates all running WSL processes)");
+            System.out.println("  3. diskpart compact on " + entries.length + " vhdx file(s)");
+            System.out.println("  4. Report space reclaimed");
             System.out.println();
             System.out.println("Run without --dry-run to execute (requires Administrator).");
             return;
+        }
+
+        // fstrim each distro so freed blocks are zeroed before compaction
+        // Without this, space freed by 'rm' inside WSL is never realized on the host
+        System.out.println();
+        System.out.println("Trimming free space in WSL distros...");
+        for (int i = 0; i < entries.length; i++) {
+            System.out.println("  fstrim " + entries[i].distro + "...");
+            try {
+                Runtime.getRuntime().exec(new String[]{
+                    "wsl", "-d", entries[i].distro, "--", "fstrim", "-v", "/"
+                }).waitFor();
+            } catch (Exception ignored) {}
         }
 
         // Shutdown WSL
