@@ -28,7 +28,7 @@
 
 [settings]
 default_path = ""
-default_profiles = ["rust"]
+default_profiles = ["all"]
 
 [profiles.rust]
 name = "Rust (Cargo)"
@@ -76,6 +76,15 @@ clean_dir = "build"
 source_extensions = [".java", ".kt", ".kts", ".gradle", ".properties"]
 search_exclude = ["build"]
 build_command = "gradle build"
+
+[profiles.npm-cache]
+name = "npm Cache"
+marker = "package-lock.json"
+alt_markers = ["yarn.lock", "pnpm-lock.yaml", "bun.lock"]
+type = "command"
+command = "npm cache clean --force"
+source_extensions = []
+search_exclude = ["node_modules"]
 
 [profiles.python]
 name = "Python"

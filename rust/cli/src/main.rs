@@ -102,6 +102,26 @@ fn main() {
         let mut p = std::env::current_dir().unwrap_or_default();
         p.push("profiles.toml");
         if !p.exists() {
+            // XDG_CONFIG_HOME/dsk/profiles.toml (default: ~/.config/dsk/)
+            let xdg_home = std::env::var_os("XDG_CONFIG_HOME")
+                .map(PathBuf::from)
+                .or_else(|| dirs_home().map(|h| h.join(".config")));
+            if let Some(base) = xdg_home {
+                let candidate = base.join("dsk").join("profiles.toml");
+                if candidate.exists() {
+                    return candidate;
+                }
+            }
+            // XDG_CONFIG_DIRS/dsk/profiles.toml (default: /etc/xdg)
+            let xdg_dirs = std::env::var("XDG_CONFIG_DIRS")
+                .unwrap_or_else(|_| "/etc/xdg".to_string());
+            for dir in xdg_dirs.split(':') {
+                let candidate = PathBuf::from(dir).join("dsk").join("profiles.toml");
+                if candidate.exists() {
+                    return candidate;
+                }
+            }
+            // dev fallback: relative to binary (original repo layout)
             if let Ok(exe) = std::env::current_exe() {
                 if let Some(dir) = exe.parent() {
                     let shared = dir.join("../../powershell/main/config/profiles.toml");
@@ -193,6 +213,12 @@ fn main() {
         }
         Commands::ListProfiles => unreachable!(),
     }
+}
+
+fn dirs_home() -> Option<PathBuf> {
+    std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .map(PathBuf::from)
 }
 
 fn resolve_profiles(lang: &[String], config: &dyn ConfigProvider) -> Result<Vec<String>, String> {

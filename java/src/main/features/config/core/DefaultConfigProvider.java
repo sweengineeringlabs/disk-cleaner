@@ -1,15 +1,14 @@
-package config;
+package main.features.config.core;
 
-import java.io.File;
+import main.features.config.api.ConfigProvider;
+
 import java.io.BufferedReader;
+import java.io.File;
 import java.io.FileReader;
 import java.io.IOException;
 
-/**
- * Pure-Java TOML config parser matching the PowerShell/Rust TomlConfig.
- * Supports single-line key=value pairs and inline arrays.
- */
-class TomlConfig {
+/** Pure-Java TOML config parser. Supports single-line key=value and inline arrays. */
+public class DefaultConfigProvider implements ConfigProvider {
 
     private String[] keys;
     private String[] values;
@@ -17,7 +16,7 @@ class TomlConfig {
     private String[] profiles;
     private int profileCount;
 
-    TomlConfig() {
+    DefaultConfigProvider() {
         keys = new String[256];
         values = new String[256];
         size = 0;
@@ -25,14 +24,14 @@ class TomlConfig {
         profileCount = 0;
     }
 
-    static TomlConfig load(String path) {
+    public static DefaultConfigProvider load(String path) {
         var file = new File(path);
         if (!file.exists()) {
             System.err.println("Config file not found: " + path);
             return null;
         }
 
-        var config = new TomlConfig();
+        var config = new DefaultConfigProvider();
         var currentSection = "";
 
         try {
@@ -42,7 +41,6 @@ class TomlConfig {
                 var line = stripComment(rawLine).trim();
                 if (line.isEmpty()) continue;
 
-                // Section header
                 if (line.startsWith("[") && line.endsWith("]")) {
                     currentSection = line.substring(1, line.length() - 1);
                     if (currentSection.startsWith("profiles.")) {
@@ -53,7 +51,6 @@ class TomlConfig {
                     continue;
                 }
 
-                // Key = value
                 int eq = line.indexOf('=');
                 if (eq > 0) {
                     var key = line.substring(0, eq).trim();
@@ -73,7 +70,7 @@ class TomlConfig {
         return config;
     }
 
-    String getValue(String key) {
+    public String getValue(String key) {
         for (int i = 0; i < size; i++) {
             if (keys[i].equals(key)) {
                 return stripQuotes(values[i]);
@@ -82,7 +79,7 @@ class TomlConfig {
         return "";
     }
 
-    String[] getArray(String key) {
+    public String[] getArray(String key) {
         for (int i = 0; i < size; i++) {
             if (keys[i].equals(key)) {
                 var raw = values[i].trim();
@@ -95,8 +92,7 @@ class TomlConfig {
                 var result = new String[parts.length];
                 int count = 0;
                 for (int j = 0; j < parts.length; j++) {
-                    var item = parts[j].trim();
-                    item = stripQuotes(item);
+                    var item = stripQuotes(parts[j].trim());
                     if (!item.isEmpty()) {
                         result[count] = item;
                         count++;
@@ -110,7 +106,7 @@ class TomlConfig {
         return new String[0];
     }
 
-    String[] profileKeys() {
+    public String[] profileKeys() {
         var result = new String[profileCount];
         for (int i = 0; i < profileCount; i++) {
             result[i] = profiles[i];
@@ -118,6 +114,7 @@ class TomlConfig {
         return result;
     }
 
+    /** Strip inline comments, respecting quoted strings. */
     private static String stripComment(String line) {
         boolean inSingle = false;
         boolean inDouble = false;
