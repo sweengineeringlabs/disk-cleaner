@@ -77,7 +77,7 @@ class VhdxCompactor {
                 $reclaimColor = if ($entry.ReclaimableBytes -ge 10GB) { "Green" } else { "White" }
                 $w.Text("    reclaimable:  $([CleanerContext]::FormatSize($entry.ReclaimableBytes))", $reclaimColor)
             } else {
-                $w.Text("    inner used:   (unavailable — WSL may be stopped)", "DarkGray")
+                $w.Text("    inner used:   (unavailable - WSL may be stopped)", "DarkGray")
             }
             $w.Text("    $($entry.Path)", "DarkGray")
             $totalBefore += $entry.SizeBytes
@@ -198,7 +198,7 @@ class VhdxCompactor {
 
     hidden [long] QueryInnerUsage([string]$distro) {
         try {
-            $out = wsl -d $distro -- bash -c "df -B1 / 2>/dev/null | awk 'NR==2{print \$3}'" 2>$null
+            $out = wsl -d $distro -- bash -c "df -B1 / 2>/dev/null | awk 'NR==2{print `$3}'" 2>$null
             if ($out -match '^\d+$') { return [long]$out.Trim() }
         } catch {}
         return -1
