@@ -133,13 +133,33 @@ public class DiskCleaner {
         System.out.println("  --include <pat>    Include only matching projects");
         System.out.println("  --all              Process all projects, ignoring filters");
         System.out.println("  --json             Emit structured JSON lines");
-        System.out.println("  --dry-run          Preview without modifying");
+        System.out.println("  --dry-run          Preview without modifying (clean, compact-wsl)");
         System.out.println("  --parallel         Run clean operations in parallel");
-        System.out.println("  --text <pattern>   Search text in source files");
-        System.out.println("  --disk-usage       Generic disk usage scan");
+        System.out.println("  --text <pattern>   Search text in source files (search)");
+        System.out.println("  --disk-usage       Generic disk usage scan (analyze)");
         System.out.println("  --depth <n>        Directory depth for disk-usage (default: 2)");
-        System.out.println("  --benchmark        Benchmark build times");
-        System.out.println("  --history          Show run history only");
+        System.out.println("  --benchmark        Benchmark build times (analyze)");
+        System.out.println("  --history          Show run history only (monitor)");
+        System.out.println();
+        System.out.println("WORKFLOW:");
+        System.out.println("  1. See available profiles:      disk-cleaner list-profiles");
+        System.out.println("  2. Preview what would be freed: disk-cleaner clean --lang all --dry-run --path ~/projects");
+        System.out.println("  3. Clean build artifacts:       disk-cleaner clean --lang all --path ~/projects");
+        System.out.println("  4. Check WSL bloat:             disk-cleaner compact-wsl --dry-run");
+        System.out.println("  5. Compact WSL disk (Admin):    disk-cleaner compact-wsl");
+        System.out.println();
+        System.out.println("EXAMPLES:");
+        System.out.println("  disk-cleaner clean --lang rust");
+        System.out.println("  disk-cleaner clean --lang all --dry-run --path ~/projects");
+        System.out.println("  disk-cleaner clean --lang rust --lang node --parallel");
+        System.out.println("  disk-cleaner analyze --disk-usage --path ~/");
+        System.out.println("  disk-cleaner search --lang rust --text unsafe");
+        System.out.println("  disk-cleaner monitor --history");
+        System.out.println("  disk-cleaner compact-wsl --dry-run");
+        System.out.println("  disk-cleaner compact-wsl");
+        System.out.println();
+        System.out.println("CONFIGURATION:");
+        System.out.println("  Profiles defined in profiles.toml. Add languages without changing code.");
     }
 
     static CliArgs parseArgs(String[] args) {

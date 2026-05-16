@@ -7,7 +7,34 @@ use disk_cleaner_config::api::ConfigProvider;
 use disk_cleaner_config::{load_config, load_profile, create_scanner};
 
 #[derive(Parser)]
-#[command(name = "disk-cleaner", version, about = "Multi-language build artifact cleaner")]
+#[command(
+    name = "disk-cleaner",
+    version,
+    about = "Multi-language build artifact cleaner",
+    after_help = "WORKFLOW:
+  1. See available profiles:       disk-cleaner list-profiles
+  2. Preview what would be freed:  disk-cleaner clean --lang all --dry-run --path ~/projects
+  3. Clean build artifacts:        disk-cleaner clean --lang all --path ~/projects
+  4. Check WSL bloat:              disk-cleaner compact-wsl --dry-run
+  5. Compact WSL disk (Admin):     disk-cleaner compact-wsl
+
+EXAMPLES:
+  disk-cleaner clean --lang rust
+  disk-cleaner clean --lang all --dry-run --path ~/projects
+  disk-cleaner clean --lang rust --lang node --parallel
+  disk-cleaner analyze --disk-usage --path ~/
+  disk-cleaner analyze --lang rust --benchmark
+  disk-cleaner search --lang all --path ~/projects
+  disk-cleaner search --lang rust --text unsafe
+  disk-cleaner monitor --history
+  disk-cleaner compact-wsl --dry-run
+  disk-cleaner compact-wsl
+  disk-cleaner list-profiles
+
+CONFIGURATION:
+  Profiles are defined in profiles.toml (default: ./profiles.toml).
+  Add new languages without changing code — see profiles.toml for the schema."
+)]
 struct Cli {
     #[command(subcommand)]
     command: Option<Commands>,

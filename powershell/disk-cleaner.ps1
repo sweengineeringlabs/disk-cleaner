@@ -187,6 +187,16 @@ OPTIONS (analyze only):
 OPTIONS (monitor only):
     -History              Show run history (past cleans/analyses)
 
+OPTIONS (compact-wsl only):
+    -DryRun               Preview reclaimable space without compacting
+
+WORKFLOW:
+    1. See available profiles:      disk-cleaner.ps1 list-profiles
+    2. Preview what would be freed: disk-cleaner.ps1 clean -Lang all -DryRun -Path C:\projects
+    3. Clean build artifacts:       disk-cleaner.ps1 clean -Lang all -Path C:\projects
+    4. Check WSL bloat:             disk-cleaner.ps1 compact-wsl -DryRun
+    5. Compact WSL disk (Admin):    disk-cleaner.ps1 compact-wsl
+
 Press Ctrl+C at any time to cancel instantly. A partial summary is printed on exit.
 
 EXAMPLES:
