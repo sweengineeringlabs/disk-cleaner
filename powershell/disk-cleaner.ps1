@@ -159,7 +159,7 @@ COMMANDS:
     analyze           Report disk space consumption by build artifacts
                       Use -DiskUsage to scan any path with remediation hints
     monitor           Show build process resources and run history
-    compact-wsl       Compact WSL virtual disks to reclaim space (Admin required)
+    compact-wsl       Compact WSL virtual disks; reports inner used vs reclaimable space (Admin required)
     list-profiles     Show available language profiles
     help              Show this help message
 
@@ -199,7 +199,7 @@ EXAMPLES:
     disk-cleaner.ps1 analyze -DiskUsage -Path /tmp -Depth 3 # deeper scan
     disk-cleaner.ps1 monitor                              # process resources + history
     disk-cleaner.ps1 monitor -History                     # history only
-    disk-cleaner.ps1 compact-wsl -DryRun                  # preview WSL compaction
+    disk-cleaner.ps1 compact-wsl -DryRun                  # preview reclaimable space
     disk-cleaner.ps1 compact-wsl                          # compact (Admin required)
     disk-cleaner.ps1 -Lang rust                           # clean is default
     disk-cleaner.ps1 list-profiles
