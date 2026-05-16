@@ -20,7 +20,7 @@ Manually cleaning each project is tedious: different languages use different bui
 | **search** | Find and report projects, with optional text/regex search in source files |
 | **analyze** | Report disk space consumption by build artifacts, or scan any path for disk usage with remediation hints |
 | **monitor** | Track build process resources (CPU, memory, runtime) and view run history |
-| **compact-wsl** | Discover and compact WSL virtual disks to reclaim space |
+| **compact-wsl** | Discover and compact WSL virtual disks; reports inner filesystem used vs VHDX file size to show reclaimable zero-blocks before compacting |
 
 ### Supported Languages
 
@@ -28,6 +28,7 @@ Manually cleaning each project is tedious: different languages use different bui
 |----------|-----------|----------------|
 | Rust | `Cargo.lock` | `cargo clean` |
 | Node.js | `package-lock.json`, `yarn.lock`, `pnpm-lock.yaml`, `bun.lock` | Remove `node_modules`, `.next`, `.nuxt`, `dist` |
+| npm Cache | `package-lock.json`, `yarn.lock`, `pnpm-lock.yaml`, `bun.lock` | Run `npm cache clean --force` (clears global npm cache) |
 | Java (Maven) | `pom.xml` | `mvn clean` (supports `mvnw` wrapper) |
 | Java (Gradle) | `build.gradle`, `build.gradle.kts` | `gradle clean` (supports `gradlew` wrapper) |
 | Python | `pyproject.toml`, `setup.py`, `requirements.txt` | Remove `.venv`, `__pycache__`, `.mypy_cache`, etc. |
@@ -46,15 +47,16 @@ New languages can be added via the TOML configuration file without modifying any
 - **Build benchmarking** — measure and compare build times across projects
 - **Process monitoring** — real-time CPU and memory tracking of build processes
 - **Run history** — persistent log of past operations (last 100 entries)
-- **WSL compaction** — discover all WSL distros, locate VHDX files, and compact with dry-run preview (requires elevated terminal; manual diskpart steps documented as alternative)
+- **WSL compaction** — discover all WSL distros, locate VHDX files, report inner filesystem used vs VHDX file size (zero-block detection), and compact with dry-run preview (requires elevated terminal; manual diskpart steps documented as alternative)
 
 ### Implementations
 
-Two parallel implementations share a single TOML configuration:
+Three parallel implementations share a single TOML configuration:
 
 - **PowerShell** (`disk-cleaner.ps1`) — primary implementation for Windows, all commands
-- **Bash** (`bin/disk-cleaner`) — implementation for Linux/macOS, supports clean, search, list-profiles, and help
+- **Rust** (`rust/`) — full feature parity, clap CLI
+- **Java** (`java/`) — full feature parity, compiled with justc
 
 ### Typical Impact
 
-In a workspace with 74 Rust projects, a single run freed **~10 GiB** of disk space. Across all supported languages in a mixed workspace, savings of 10-30 GiB are common.
+In a workspace with 242 Rust projects, a single run freed **~59 GiB** of build artifacts. Combined with WSL VHDX compaction (~21 GiB reclaimed) and cache cleanup, total savings of 80-130 GiB are achievable in a typical development machine.

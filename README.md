@@ -22,7 +22,7 @@ All three implementations support the same command set:
 | `search` | Find and report projects, with optional text search |
 | `analyze` | Report disk space consumption, or generic disk usage scan |
 | `monitor` | Show build process resources and run history |
-| `compact-wsl` | Compact WSL virtual disks (Windows only, Admin required) |
+| `compact-wsl` | Compact WSL virtual disks — reports inner used vs reclaimable space (Windows only, Admin required) |
 | `list-profiles` | Show available language profiles |
 
 ## Quick Start
@@ -59,8 +59,7 @@ disk-cleaner/
     lib/                    # Library crate (config, model, features)
   java/                     # Java implementation (justc)
     src/DiskCleaner.java    # Entry point
-    src/config/             # TOML parser
-    src/model/              # Profile, context
-    src/features/           # Feature classes
-    build.ps1 / build.sh    # Build scripts
+    src/main/features/      # Feature modules (api / core / saf layers)
+    tests/                  # Integration + e2e tests
+    build.ps1               # Build script
 ```

@@ -44,7 +44,7 @@ powershell.exe -ExecutionPolicy Bypass -File "./disk-cleaner.ps1" analyze -DiskU
 - **Build benchmarking** — measure and compare build times across projects
 - **Process monitoring** — track CPU, memory, and runtime of build processes
 - **Run history** — persistent log of past cleans and analyses (last 100 entries)
-- **WSL compaction** — discover and compact WSL virtual disks with dry-run preview
+- **WSL compaction** — discover and compact WSL virtual disks; reports inner filesystem used vs VHDX file size to show reclaimable zero-blocks before compacting
 
 ## Usage
 
@@ -219,10 +219,21 @@ disk-cleaner clean --lang node --json | jq 'select(.event == "clean_complete")'
 
 The `compact-wsl` command requires an **elevated (Administrator) PowerShell terminal**. The script checks for admin privileges and exits with an error if not elevated — it cannot self-elevate interactively.
 
+Before compacting, the tool queries each distro's inner filesystem usage via `df -B1` and reports the gap between the VHDX file size and actual used space — this gap is the zero-block bloat that compaction will reclaim.
+
 ```powershell
 # From an elevated PowerShell terminal:
-disk-cleaner.ps1 compact-wsl -DryRun    # preview what would be compacted
+disk-cleaner.ps1 compact-wsl -DryRun    # preview reclaimable space without compacting
 disk-cleaner.ps1 compact-wsl            # compact all WSL virtual disks
+```
+
+Example output:
+```
+  Ubuntu-24.04
+    vhdx (outer): 94.1 GB
+    inner used:   53.0 GB
+    reclaimable:  41.1 GB
+    C:\Users\...\ext4.vhdx
 ```
 
 **Manual alternative** — if you prefer not to run the script as Administrator, or need to compact a specific VHDX file directly:
@@ -299,3 +310,4 @@ disk-cleaner/
 | Java (Maven) | `pom.xml` | `mvn clean` (supports `mvnw` wrapper) |
 | Java (Gradle) | `build.gradle`, `build.gradle.kts` | `gradle clean` (supports `gradlew` wrapper) |
 | Python | `pyproject.toml`, `setup.py`, `requirements.txt` | Remove `.venv`, `venv`, `__pycache__`, `.mypy_cache`, `.pytest_cache`, `.ruff_cache`, `dist`, `build` |
+| npm Cache | `package-lock.json`, `yarn.lock`, `pnpm-lock.yaml`, `bun.lock` | Run `npm cache clean --force` (clears global npm cache) |

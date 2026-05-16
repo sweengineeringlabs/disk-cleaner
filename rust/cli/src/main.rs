@@ -83,9 +83,10 @@ enum Commands {
         history: bool,
     },
 
-    /// Compact WSL virtual disks to reclaim space (Admin required)
+    /// Compact WSL virtual disks to reclaim space (Admin required).
+    /// Reports inner filesystem usage vs VHDX file size to show reclaimable space before compacting.
     CompactWsl {
-        /// Preview without compacting
+        /// Preview reclaimable space without compacting
         #[arg(short = 'd', long)]
         dry_run: bool,
     },
