@@ -121,7 +121,7 @@ public class DiskCleaner {
         System.out.println("  search          Find and report projects");
         System.out.println("  analyze         Report disk space consumption");
         System.out.println("  monitor         Show build processes and run history");
-        System.out.println("  compact-wsl     Compact WSL virtual disks; reports inner used vs reclaimable space (Admin required)");
+        System.out.println("  compact-wsl     Compact WSL virtual disks; runs fstrim to realize freed space on host, reports reclaimable (Admin required)");
         System.out.println("  list-profiles   Show available language profiles");
         System.out.println("  help            Show this help message");
         System.out.println();

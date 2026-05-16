@@ -159,7 +159,7 @@ COMMANDS:
     analyze           Report disk space consumption by build artifacts
                       Use -DiskUsage to scan any path with remediation hints
     monitor           Show build process resources and run history
-    compact-wsl       Compact WSL virtual disks; reports inner used vs reclaimable space (Admin required)
+    compact-wsl       Compact WSL virtual disks; runs fstrim to realize freed space on host, reports reclaimable (Admin required)
     list-profiles     Show available language profiles
     help              Show this help message
 

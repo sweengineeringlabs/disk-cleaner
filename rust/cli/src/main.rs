@@ -84,7 +84,8 @@ enum Commands {
     },
 
     /// Compact WSL virtual disks to reclaim space (Admin required).
-    /// Reports inner filesystem usage vs VHDX file size to show reclaimable space before compacting.
+    /// Runs fstrim inside each distro to realize space freed by rm on the host,
+    /// then reports inner filesystem usage vs VHDX file size before compacting.
     CompactWsl {
         /// Preview reclaimable space without compacting
         #[arg(short = 'd', long)]
