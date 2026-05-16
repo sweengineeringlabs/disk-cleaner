@@ -59,10 +59,25 @@ public class DefaultWslCompactor implements WslCompactor {
         System.out.println("Found " + entries.length + " virtual disk(s):");
         System.out.println();
 
+        // Query inner usage for each distro
+        for (int i = 0; i < entries.length; i++) {
+            long inner = queryInnerUsage(entries[i].distro);
+            if (inner >= 0) {
+                entries[i].innerUsedBytes = inner;
+                entries[i].reclaimableBytes = Math.max(0, entries[i].sizeBytes - inner);
+            }
+        }
+
         long totalBefore = 0;
         for (int i = 0; i < entries.length; i++) {
             System.out.println("  " + entries[i].distro);
-            System.out.println("    vhdx: " + ConfigFactory.formatSize(entries[i].sizeBytes));
+            System.out.println("    vhdx (outer): " + ConfigFactory.formatSize(entries[i].sizeBytes));
+            if (entries[i].innerUsedBytes >= 0) {
+                System.out.println("    inner used:   " + ConfigFactory.formatSize(entries[i].innerUsedBytes));
+                System.out.println("    reclaimable:  " + ConfigFactory.formatSize(entries[i].reclaimableBytes));
+            } else {
+                System.out.println("    inner used:   (unavailable — WSL may be stopped)");
+            }
             System.out.println("    " + entries[i].path);
             totalBefore += entries[i].sizeBytes;
         }
@@ -239,6 +254,21 @@ public class DefaultWslCompactor implements WslCompactor {
         } finally {
             if (tempPath != null) new File(tempPath).delete();
         }
+    }
+
+    private long queryInnerUsage(String distro) {
+        try {
+            var proc = Runtime.getRuntime().exec(new String[]{
+                "wsl", "-d", distro, "--", "bash", "-c",
+                "df -B1 / 2>/dev/null | awk 'NR==2{print $3}'"
+            });
+            var reader = new BufferedReader(new InputStreamReader(proc.getInputStream()));
+            var line = reader.readLine();
+            reader.close();
+            proc.waitFor();
+            if (line != null && !line.isBlank()) return Long.parseLong(line.trim());
+        } catch (Exception ignored) {}
+        return -1;
     }
 
     private boolean isAdmin() {

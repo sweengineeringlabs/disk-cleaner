@@ -47,6 +47,15 @@ impl WslCompactor for DefaultWslCompactor {
             return;
         }
 
+        // Query inner usage for each distro before display
+        let entries: Vec<VhdxEntry> = entries.into_iter().map(|mut e| {
+            if let Some(inner) = query_inner_usage(&e.distro) {
+                e.reclaimable_bytes = Some(e.size_bytes.saturating_sub(inner));
+                e.inner_used_bytes = Some(inner);
+            }
+            e
+        }).collect();
+
         // Display findings
         let mode_label = if dry_run { " (dry run)" } else { "" };
         println!("--- WSL VHDX Compaction{mode_label} ---");
@@ -56,7 +65,13 @@ impl WslCompactor for DefaultWslCompactor {
         let mut total_before: u64 = 0;
         for entry in &entries {
             println!("  {}", entry.distro);
-            println!("    vhdx: {}", format_size(entry.size_bytes));
+            println!("    vhdx (outer): {}", format_size(entry.size_bytes));
+            if let (Some(inner), Some(reclaim)) = (entry.inner_used_bytes, entry.reclaimable_bytes) {
+                println!("    inner used:   {}", format_size(inner));
+                println!("    reclaimable:  {}", format_size(reclaim));
+            } else {
+                println!("    inner used:   (unavailable — WSL may be stopped)");
+            }
             println!("    {}", entry.path);
             total_before += entry.size_bytes;
         }
@@ -208,6 +223,8 @@ fn find_vhdx_files(distros: &[String]) -> Vec<VhdxEntry> {
                 distro: distro.clone(),
                 path: path_str.clone(),
                 size_bytes: size,
+                inner_used_bytes: None,
+                reclaimable_bytes: None,
             });
             seen.insert(path_str);
             vhdx_idx += 1;
@@ -277,6 +294,16 @@ fn compact_vhdx(vhdx_path: &str) -> bool {
         }
         Err(_) => false,
     }
+}
+
+/// Query bytes used inside a WSL distro's root filesystem via `df -B1`.
+fn query_inner_usage(distro: &str) -> Option<u64> {
+    let out = Command::new("wsl")
+        .args(["-d", distro, "--", "bash", "-c", "df -B1 / 2>/dev/null | awk 'NR==2{print $3}'"])
+        .output()
+        .ok()?;
+    let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    s.parse::<u64>().ok()
 }
 
 /// Check if running with administrator privileges (Windows).

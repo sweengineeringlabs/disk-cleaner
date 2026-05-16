@@ -60,19 +60,35 @@ class VhdxCompactor {
         $w.Text("Found $($vhdxEntries.Count) virtual disk(s):", "White")
         $w.BlankLine()
 
+        # Query inner usage for each distro
+        foreach ($entry in $vhdxEntries) {
+            $inner = $this.QueryInnerUsage($entry.Distro)
+            $entry | Add-Member -NotePropertyName InnerUsedBytes -NotePropertyValue $inner -Force
+            $entry | Add-Member -NotePropertyName ReclaimableBytes -NotePropertyValue $(if ($inner -ge 0) { [Math]::Max(0, $entry.SizeBytes - $inner) } else { -1 }) -Force
+        }
+
         $totalBefore = [long]0
         foreach ($entry in $vhdxEntries) {
             $sizeColor = if ($entry.SizeBytes -ge 50GB) { "Red" } elseif ($entry.SizeBytes -ge 10GB) { "Yellow" } else { "White" }
             $w.Text("  $($entry.Distro)", $sizeColor)
-            $w.Text("    vhdx: $([CleanerContext]::FormatSize($entry.SizeBytes))", $sizeColor)
+            $w.Text("    vhdx (outer): $([CleanerContext]::FormatSize($entry.SizeBytes))", $sizeColor)
+            if ($entry.InnerUsedBytes -ge 0) {
+                $w.Text("    inner used:   $([CleanerContext]::FormatSize($entry.InnerUsedBytes))", "White")
+                $reclaimColor = if ($entry.ReclaimableBytes -ge 10GB) { "Green" } else { "White" }
+                $w.Text("    reclaimable:  $([CleanerContext]::FormatSize($entry.ReclaimableBytes))", $reclaimColor)
+            } else {
+                $w.Text("    inner used:   (unavailable — WSL may be stopped)", "DarkGray")
+            }
             $w.Text("    $($entry.Path)", "DarkGray")
             $totalBefore += $entry.SizeBytes
 
             $w.Json(@{
-                event      = "compact_target"
-                distro     = $entry.Distro
-                path       = $entry.Path
-                size_bytes = $entry.SizeBytes
+                event            = "compact_target"
+                distro           = $entry.Distro
+                path             = $entry.Path
+                size_bytes       = $entry.SizeBytes
+                inner_used_bytes = $entry.InnerUsedBytes
+                reclaimable_bytes = $entry.ReclaimableBytes
             })
         }
 
@@ -178,6 +194,14 @@ class VhdxCompactor {
             total_reclaimed_bytes = $totalReclaimed
             vhdx_count           = $vhdxEntries.Count
         })
+    }
+
+    hidden [long] QueryInnerUsage([string]$distro) {
+        try {
+            $out = wsl -d $distro -- bash -c "df -B1 / 2>/dev/null | awk 'NR==2{print \$3}'" 2>$null
+            if ($out -match '^\d+$') { return [long]$out.Trim() }
+        } catch {}
+        return -1
     }
 
     hidden [System.Collections.ArrayList] FindVhdxFiles([string[]]$distros) {
