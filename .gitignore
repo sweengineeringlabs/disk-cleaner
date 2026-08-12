@@ -9,3 +9,4 @@ rust/Cargo.lock
 java/disk-cleaner
 java/disk-cleaner.exe
 java/*.pdb
+java/out/
